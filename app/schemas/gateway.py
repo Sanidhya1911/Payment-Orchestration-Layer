@@ -99,3 +99,4 @@ class GatewayHealthMetricsResponse(BaseModel):
     circuit_breaker_status: str
     last_heartbeat_at: datetime
     created_at: datetime
+

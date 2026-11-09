@@ -114,3 +114,4 @@ class GatewayRoutes(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Relationships
     routing_config = relationship("RoutingConfig", back_populates="routes")
     gateway = relationship("GatewayConfig", back_populates="routes")
+

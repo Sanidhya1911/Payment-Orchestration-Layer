@@ -104,3 +104,4 @@ class GatewayHealthMetrics(Base):
     )
 
     gateway = relationship("GatewayConfig", back_populates="health_metrics")
+

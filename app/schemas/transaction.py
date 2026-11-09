@@ -87,3 +87,4 @@ class TransactionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     state_logs: Optional[List[TransactionStateLogResponse]] = []
+

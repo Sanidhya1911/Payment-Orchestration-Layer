@@ -109,3 +109,4 @@ async def create_gateway_route(
     db.add(route)
     await db.flush()
     return {"id": route.id, "gateway_id": route.gateway_id, "priority": route.priority}
+

@@ -240,3 +240,4 @@ def downgrade() -> None:
     op.drop_table('idempotency_keys')
     op.drop_table('routing_config')
     op.drop_table('gateway_config')
+

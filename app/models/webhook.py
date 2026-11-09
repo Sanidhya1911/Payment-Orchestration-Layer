@@ -69,3 +69,4 @@ class ProcessedWebhookEvents(Base):
         DateTime(timezone=True),
         nullable=True
     )
+

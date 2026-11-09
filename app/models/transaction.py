@@ -210,3 +210,4 @@ class TransactionStateLog(Base):
 
     # Relationships
     transaction = relationship("Transactions", back_populates="state_logs")
+

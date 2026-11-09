@@ -224,3 +224,4 @@ Our test suite rigorously verifies that:
 3. `processed_webhook_events` is anchored by the composite primary key `(gateway, event_id)`.
 4. `transaction_state_log` has no `updated_at` column, guaranteeing immutable audit trails.
 5. Pydantic request models fail validation if a float amount is submitted (e.g. `500.50`), requiring exact integer minor units (e.g. `50050` paise).
+

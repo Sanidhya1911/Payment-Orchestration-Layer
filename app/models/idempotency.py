@@ -79,3 +79,4 @@ class IdempotencyKeys(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         index=True,
         comment="TTL expiry for table pruning/retention policy"
     )
+
