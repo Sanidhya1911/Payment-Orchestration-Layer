@@ -1,3 +1,13 @@
+from app.services.idempotency import (
+    IdempotencyConflictException,
+    IdempotencyPayloadMismatchException,
+    IdempotencyResult,
+    IdempotencyScopeHandle,
+    IdempotencyService,
+    InvalidIdempotencyKeyException,
+    get_idempotency_service,
+    idempotency_service,
+)
 from app.services.state_machine import (
     ALLOWED_TRANSITIONS,
     ConcurrentStateMutationException,
@@ -16,4 +26,12 @@ __all__ = [
     "GatewayScopeResult",
     "GatewayExecutionResult",
     "TransactionStateMachine",
+    "IdempotencyService",
+    "idempotency_service",
+    "get_idempotency_service",
+    "IdempotencyConflictException",
+    "IdempotencyPayloadMismatchException",
+    "InvalidIdempotencyKeyException",
+    "IdempotencyResult",
+    "IdempotencyScopeHandle",
 ]

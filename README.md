@@ -265,7 +265,57 @@ async with sm.gateway_transition_scope(
 
 ---
 
-## 🚀 Quickstart & Setup
+## ⚡ Idempotency & Distributed Locking Service
+
+### Mission-Critical Concurrency Control
+Prevents double-charging, race conditions, and network replay attacks using PostgreSQL transaction-level advisory locks.
+
+1. **Client-Generated UUID (`Idempotency-Key` Header)**:
+   - Validates that the key conforms to UUIDv4 format. Rejects malformed or missing headers with `400 Bad Request`.
+2. **PostgreSQL Advisory Locks (`pg_advisory_xact_lock`)**:
+   - Computes a signed 64-bit integer hash from `(merchant_id, idempotency_key)`:
+     $$\text{Lock ID} = \text{int64}(\text{SHA-256}(\text{merchant\_id} : \text{key})[:8])$$
+   - Executes `SELECT pg_advisory_xact_lock(:lock_id)`. Serializes concurrent duplicate requests at the database engine level without table-level write locks.
+3. **Status `PROCESSING` -> HTTP 409 Conflict**:
+   - If an identical key is already actively processing, immediately returns `409 Conflict` with `Retry-After: 2` header, safely rejecting the concurrent attempt.
+4. **Status `COMPLETED` -> Cached JSON Response**:
+   - If the previous execution was completed successfully, returns the exact cached JSON payload and HTTP status code without re-running any business logic or touching payment gateways.
+5. **Payload Tampering Protection**:
+   - If a client attempts to reuse an idempotency key with different request parameters (amount, currency, order ID), the service detects the SHA-256 mismatch and returns `422 Unprocessable Content`.
+6. **24-Hour Expiration & Automatic Cleanup**:
+   - Idempotency records are assigned a 24-hour TTL (`expires_at = now() + 24 hours`).
+   - Expired records can be pruned via `idempotency_service.cleanup_expired_keys()` or the maintenance endpoint `POST /api/v1/transactions/idempotency/cleanup`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant API as FastAPI / IdempotencyService
+    participant PG as PostgreSQL (pg_advisory_xact_lock)
+    participant Core as Payment Engine
+
+    Client->>API: POST /transactions (Header: Idempotency-Key: <UUID>)
+    API->>API: Validate UUID format & compute 64-bit advisory lock hash
+    API->>PG: BEGIN & SELECT pg_advisory_xact_lock(hash)
+    PG-->>API: Advisory Lock Granted (Transaction Level)
+    
+    API->>PG: Query idempotency_keys WHERE key = :key AND merchant_id = :merchant_id
+    
+    alt Status == 'PROCESSING' (Concurrent In-Flight)
+        API->>PG: COMMIT (Releases Advisory Lock)
+        API-->>Client: 409 Conflict (Header: Retry-After: 2)
+    else Status == 'COMPLETED' (Previously Cached)
+        API->>PG: COMMIT (Releases Advisory Lock)
+        API-->>Client: 200/201 OK (Cached JSON Response)
+    else Key Not Found (First Arrival)
+        API->>PG: INSERT INTO idempotency_keys (status='PROCESSING', expires_at=now+24h)
+        API->>PG: COMMIT (Releases Advisory Lock)
+        API->>Core: Process Payment & Gateway Interaction
+        Core-->>API: Payment Result (ID, Status)
+        API->>PG: UPDATE idempotency_keys SET status='COMPLETED', response_body=:json
+        API-->>Client: 201 Created (Payment Response)
+    end
+```
 
 ### 1. Requirements
 - Python 3.11+

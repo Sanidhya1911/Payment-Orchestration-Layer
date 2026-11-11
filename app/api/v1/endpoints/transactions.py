@@ -17,6 +17,10 @@ from app.schemas.transaction import (
     TransactionResponse,
     TransactionTransitionRequest,
 )
+from app.services.idempotency import (
+    IdempotencyService,
+    get_idempotency_service,
+)
 from app.services.state_machine import (
     InvalidStateTransitionException,
     TransactionNotFoundException,
@@ -31,105 +35,80 @@ async def create_transaction(
     payload: TransactionCreateRequest,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_async_db),
+    idemp_service: IdempotencyService = Depends(get_idempotency_service),
 ):
     """
     Initiates a new payment transaction with strict BIGINT financial precision (paise/cents)
-    and mission-critical idempotency safety.
+    and mission-critical idempotency & PostgreSQL advisory locking.
     """
-    now = datetime.now(timezone.utc)
-    idempotency_record = None
-
-    # 1. Idempotency Check & Distributed Locking
-    if idempotency_key:
-        # Compute SHA-256 payload hash
-        canonical_payload = json.dumps(payload.model_dump(), sort_keys=True, default=str)
-        payload_hash = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
-
-        # Check existing key for merchant
-        query = select(IdempotencyKeys).where(
-            IdempotencyKeys.key == idempotency_key,
-            IdempotencyKeys.merchant_id == payload.merchant_id
-        )
-        result = await db.execute(query)
-        idempotency_record = result.scalar_one_or_none()
-
-        if idempotency_record:
-            # If completed, return cached response
-            if idempotency_record.status == IdempotencyStatus.COMPLETED.value:
-                if idempotency_record.request_hash != payload_hash:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Idempotency key reused with mismatched request payload.",
-                    )
-                return idempotency_record.response_body
-
-            # If pending and currently locked, reject concurrent collision
-            if idempotency_record.locked_until and idempotency_record.locked_until > now:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A transaction with this idempotency key is currently in-flight. Please retry shortly.",
-                    headers={"Retry-After": "2"}
-                )
-        else:
-            # Acquire lock for new idempotency key
-            idempotency_record = IdempotencyKeys(
-                key=idempotency_key,
-                merchant_id=payload.merchant_id,
-                request_path="/api/v1/transactions",
-                request_hash=payload_hash,
-                status=IdempotencyStatus.PENDING.value,
-                locked_until=now + timedelta(seconds=30),
-                expires_at=now + timedelta(hours=24),
-            )
-            db.add(idempotency_record)
-            await db.flush()
-
-    # 2. Financial Precision: Amount is guaranteed BIGINT (paise/cents)
-    transaction = Transactions(
+    async with idemp_service.idempotent_scope(
+        session=db,
+        key=idempotency_key,
         merchant_id=payload.merchant_id,
-        order_id=payload.order_id,
-        customer_id=payload.customer_id,
-        amount=payload.amount,  # integer paise/cents
-        currency=payload.currency,
-        status=TransactionState.CREATED.value,
-        payment_method=payload.payment_method.value,
-        payment_method_details=payload.payment_method_details,
-        metadata_=payload.metadata,
-    )
-    db.add(transaction)
-    await db.flush()
+        request_path="/api/v1/transactions",
+        payload=payload.model_dump(),
+    ) as idemp:
+        if idemp.is_cached:
+            return idemp.cached_response
 
-    # 3. Append-only Immutable State Log Audit Trail
-    state_log = TransactionStateLog(
-        transaction_id=transaction.id,
-        from_state=None,
-        to_state=TransactionState.CREATED.value,
-        trigger=StateTrigger.API_REQUEST.value,
-        actor_id=payload.merchant_id,
-        gateway_payload=None,
-        transition_metadata={"reason": "Transaction initiated via Client API"},
-    )
-    db.add(state_log)
-    await db.flush()
+        # 1. Financial Precision: Amount is guaranteed BIGINT (paise/cents)
+        transaction = Transactions(
+            merchant_id=payload.merchant_id,
+            order_id=payload.order_id,
+            customer_id=payload.customer_id,
+            amount=payload.amount,  # integer paise/cents
+            currency=payload.currency,
+            status=TransactionState.CREATED.value,
+            payment_method=payload.payment_method.value,
+            payment_method_details=payload.payment_method_details,
+            metadata_=payload.metadata,
+        )
+        db.add(transaction)
+        await db.flush()
 
-    # Refresh to include state log relation
-    stmt = (
-        select(Transactions)
-        .options(selectinload(Transactions.state_logs))
-        .where(Transactions.id == transaction.id)
-    )
-    res = await db.execute(stmt)
-    transaction_loaded = res.scalar_one()
+        # 2. Append-only Immutable State Log Audit Trail
+        state_log = TransactionStateLog(
+            transaction_id=transaction.id,
+            from_state=None,
+            to_state=TransactionState.CREATED.value,
+            trigger=StateTrigger.API_REQUEST.value,
+            actor_id=payload.merchant_id,
+            gateway_payload=None,
+            transition_metadata={"reason": "Transaction initiated via Client API"},
+        )
+        db.add(state_log)
+        await db.flush()
 
-    # 4. Resolve Idempotency Key Record
-    if idempotency_record:
+        # Refresh to include state log relation
+        stmt = (
+            select(Transactions)
+            .options(selectinload(Transactions.state_logs))
+            .where(Transactions.id == transaction.id)
+        )
+        res = await db.execute(stmt)
+        transaction_loaded = res.scalar_one()
+
+        # 3. Cache response in Idempotency Service
         response_data = TransactionResponse.model_validate(transaction_loaded).model_dump(mode="json")
-        idempotency_record.status = IdempotencyStatus.COMPLETED.value
-        idempotency_record.response_code = status.HTTP_201_CREATED
-        idempotency_record.response_body = response_data
-        idempotency_record.locked_until = None
+        idemp.set_response(status_code=status.HTTP_201_CREATED, body=response_data)
 
-    return transaction_loaded
+        return transaction_loaded
+
+
+@router.post("/idempotency/cleanup", status_code=status.HTTP_200_OK, tags=["Idempotency Maintenance"])
+async def cleanup_expired_idempotency_keys(
+    db: AsyncSession = Depends(get_async_db),
+    idemp_service: IdempotencyService = Depends(get_idempotency_service),
+):
+    """
+    Expires and cleans up idempotency keys older than 24 hours.
+    """
+    count = await idemp_service.cleanup_expired_keys(session=db)
+    return {
+        "status": "success",
+        "pruned_count": count,
+        "message": f"Successfully purged {count} expired idempotency keys.",
+    }
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)
@@ -194,7 +173,7 @@ async def transition_transaction(
 
     except InvalidStateTransitionException as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             detail=str(exc)
         )
     except TransactionNotFoundException as exc:

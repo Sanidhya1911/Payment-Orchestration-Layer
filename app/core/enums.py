@@ -96,6 +96,9 @@ class WebhookProcessingStatus(str, Enum):
 
 
 class IdempotencyStatus(str, Enum):
-    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
+    # Alias for backwards compatibility
+    PENDING = "PROCESSING"

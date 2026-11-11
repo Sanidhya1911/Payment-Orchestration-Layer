@@ -78,7 +78,7 @@ def upgrade() -> None:
         sa.Column('merchant_id', sa.String(length=100), nullable=False),
         sa.Column('request_path', sa.String(length=255), nullable=False),
         sa.Column('request_hash', sa.String(length=64), nullable=False),
-        sa.Column('status', sa.String(length=30), server_default='PENDING', nullable=False),
+        sa.Column('status', sa.String(length=30), server_default='PROCESSING', nullable=False),
         sa.Column('response_code', sa.Integer(), nullable=True),
         sa.Column('response_headers', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('response_body', postgresql.JSONB(astext_type=sa.Text()), nullable=True),

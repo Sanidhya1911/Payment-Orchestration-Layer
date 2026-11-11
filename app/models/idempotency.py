@@ -48,7 +48,7 @@ class IdempotencyKeys(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     status: Mapped[str] = mapped_column(
         String(30),
-        default=IdempotencyStatus.PENDING.value,
+        default=IdempotencyStatus.PROCESSING.value,
         nullable=False,
         index=True
     )
