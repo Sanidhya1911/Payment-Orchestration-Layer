@@ -1,3 +1,8 @@
+from app.services.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerRegistry,
+    circuit_breaker_registry,
+)
 from app.services.idempotency import (
     IdempotencyConflictException,
     IdempotencyPayloadMismatchException,
@@ -34,4 +39,7 @@ __all__ = [
     "InvalidIdempotencyKeyException",
     "IdempotencyResult",
     "IdempotencyScopeHandle",
+    "CircuitBreaker",
+    "CircuitBreakerRegistry",
+    "circuit_breaker_registry",
 ]

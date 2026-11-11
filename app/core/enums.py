@@ -61,6 +61,8 @@ class StateTrigger(str, Enum):
 class GatewayType(str, Enum):
     STRIPE = "STRIPE"
     RAZORPAY = "RAZORPAY"
+    PAYU = "PAYU"
+    UPI = "UPI"
     ADYEN = "ADYEN"
     JUSPAY = "JUSPAY"
     PAYPAL = "PAYPAL"

@@ -317,7 +317,56 @@ sequenceDiagram
     end
 ```
 
-### 1. Requirements
+---
+
+## 🛡️ Payment Gateway Adapters & Circuit Breaker Pattern
+
+### 1. Unified PaymentGateway Contract
+All PSP adapters inherit from the abstract base class `PaymentGateway` and implement:
+- `authorize(request: GatewayAuthRequest) -> GatewayAuthResponse`
+- `capture(request: GatewayCaptureRequest) -> GatewayCaptureResponse`
+- `refund(request: GatewayRefundRequest) -> GatewayRefundResponse`
+
+### 2. Supported Mock Implementations
+- **Razorpay**: Returns `pay_...` IDs, 12-digit RRNs, and standard Razorpay JSON payloads.
+- **Stripe**: Returns `pi_...` PaymentIntents, `ch_...` charges, and ARNs.
+- **PayU**: Returns `payu_...` transaction IDs, `mihpayid`, and bank reference numbers.
+- **UPI**: Direct UPI rail adapter returning standard NPCI 12-digit RRNs and `00` success response codes.
+
+### 3. Simulation via `X-Mock-Response` Header
+Each mock adapter inspects the `X-Mock-Response` HTTP header to simulate upstream production edge cases:
+- `X-Mock-Response: timeout`: Simulates network lag and raises `GatewayTimeoutException`.
+- `X-Mock-Response: decline`: Simulates bank decline and raises `GatewayDeclinedException`.
+- `X-Mock-Response: unavailable` / `500`: Raises `GatewayServiceUnavailableException`.
+- `X-Mock-Response: network_error`: Raises `GatewayException` (connection reset).
+
+### 4. Circuit Breaker FSM (CLOSED, OPEN, HALF-OPEN)
+Tracks consecutive upstream timeouts and failures per gateway to fail-fast and prevent resource exhaustion:
+
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED
+    
+    CLOSED --> OPEN: Consecutive Timeouts >= 3
+    CLOSED --> CLOSED: Success (Resets Failure Count)
+    
+    OPEN --> HALF_OPEN: Elapsed Time >= 2.0s (Recovery Timeout)
+    OPEN --> OPEN: Call Attempt (<2.0s) -> Fast Fail (<1ms)
+    
+    HALF_OPEN --> CLOSED: Canary Probe Succeeds
+    HALF_OPEN --> OPEN: Canary Probe Fails
+```
+
+### 5. Fast-Fail & 2-Second Alternate Gateway Routing
+When a primary gateway encounters repeated timeouts:
+1. It trips to **`OPEN`** after 3 consecutive failures.
+2. Subsequent calls to that gateway **fail-fast in <1ms** with `CircuitBreakerOpenException` without touching the network.
+3. The `ResilientGatewayRouter` instantly falls over to the next priority gateway (e.g. Razorpay -> Stripe -> PayU -> UPI).
+4. After **2 seconds**, the tripped gateway automatically moves to **`HALF_OPEN`** to canary-probe for upstream recovery.
+
+---
+
+## 🚀 Quickstart & Setup
 - Python 3.11+
 - PostgreSQL 14+ (or compatible DB)
 
