@@ -100,3 +100,27 @@ class GatewayHealthMetricsResponse(BaseModel):
     last_heartbeat_at: datetime
     created_at: datetime
 
+
+class EvaluateRoutingRequest(BaseModel):
+    amount: int = Field(..., gt=0, description="Amount in minor units (BIGINT)")
+    currency: str = Field(..., min_length=3, max_length=3, examples=["INR"])
+    payment_method: str = Field(..., examples=["UPI"])
+    candidate_gateways: Optional[List[str]] = None
+
+
+class GatewayScoreResponse(BaseModel):
+    gateway_id: str
+    total_score: float
+    norm_success: float
+    norm_latency: float
+    norm_cost: float
+    health_score: float
+    fit_score: float
+    circuit_status: str
+
+
+class EvaluateRoutingResponse(BaseModel):
+    selected_primary_gateway: str
+    ranked_gateways: List[GatewayScoreResponse]
+
+

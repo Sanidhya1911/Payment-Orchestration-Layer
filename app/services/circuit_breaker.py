@@ -200,3 +200,4 @@ class CircuitBreakerRegistry:
 
 # Global Singleton Registry
 circuit_breaker_registry = CircuitBreakerRegistry()
+

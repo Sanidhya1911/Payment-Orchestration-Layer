@@ -54,3 +54,4 @@ class CircuitBreakerOpenException(GatewayException):
             f"Failing fast. Retry/probing available in {retry_after_seconds:.2f}s."
         )
         super().__init__(message=msg, gateway_id=gateway_id, error_code="CIRCUIT_BREAKER_OPEN")
+

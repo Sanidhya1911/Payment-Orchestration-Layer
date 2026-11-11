@@ -3,6 +3,16 @@ from app.services.circuit_breaker import (
     CircuitBreakerRegistry,
     circuit_breaker_registry,
 )
+from app.services.scoring import (
+    GatewayMetrics,
+    MultiCriteriaScorer,
+    ScoreBreakdown,
+    WEIGHT_COST,
+    WEIGHT_FIT,
+    WEIGHT_HEALTH,
+    WEIGHT_LATENCY,
+    WEIGHT_SUCCESS,
+)
 from app.services.idempotency import (
     IdempotencyConflictException,
     IdempotencyPayloadMismatchException,
@@ -42,4 +52,12 @@ __all__ = [
     "CircuitBreaker",
     "CircuitBreakerRegistry",
     "circuit_breaker_registry",
+    "MultiCriteriaScorer",
+    "ScoreBreakdown",
+    "GatewayMetrics",
+    "WEIGHT_SUCCESS",
+    "WEIGHT_LATENCY",
+    "WEIGHT_COST",
+    "WEIGHT_HEALTH",
+    "WEIGHT_FIT",
 ]

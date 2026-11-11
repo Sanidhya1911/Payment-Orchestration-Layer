@@ -1,15 +1,21 @@
+import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_db
+from app.gateways.base import GatewayAuthRequest
+from app.gateways.router import gateway_router
 from app.models.gateway import GatewayConfig
 from app.models.routing import GatewayRoutes, RoutingConfig
 from app.schemas.gateway import (
+    EvaluateRoutingRequest,
+    EvaluateRoutingResponse,
     GatewayConfigCreate,
     GatewayConfigResponse,
     GatewayRouteCreate,
+    GatewayScoreResponse,
     RoutingConfigCreate,
 )
 
@@ -109,4 +115,58 @@ async def create_gateway_route(
     db.add(route)
     await db.flush()
     return {"id": route.id, "gateway_id": route.gateway_id, "priority": route.priority}
+
+
+@router.post("/evaluate-routing", response_model=EvaluateRoutingResponse, status_code=status.HTTP_200_OK)
+async def evaluate_dynamic_routes(
+    payload: EvaluateRoutingRequest,
+):
+    """
+    Evaluates candidate payment gateways using the multi-criteria dynamic scoring algorithm:
+    Score = (W_success * NormSuccess)
+          + (W_latency * (1 - NormLatency))
+          + (W_cost * (1 - NormCost))
+          + (W_health * HealthScore)
+          + (W_fit * FitScore)
+    Returns ranked gateways and the selected primary gateway.
+    """
+    mock_auth_req = GatewayAuthRequest(
+        transaction_id=uuid.uuid4(),
+        amount=payload.amount,
+        currency=payload.currency,
+        payment_method=payload.payment_method,
+        merchant_id="merchant_eval",
+        order_id="order_eval",
+    )
+
+    ranked = gateway_router.rank_gateways(
+        request=mock_auth_req,
+        candidate_ids=payload.candidate_gateways,
+    )
+
+    if not ranked:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No candidate gateways matched routing criteria.",
+        )
+
+    score_items = [
+        GatewayScoreResponse(
+            gateway_id=s.gateway_id,
+            total_score=round(s.total_score, 4),
+            norm_success=round(s.norm_success, 4),
+            norm_latency=round(s.norm_latency, 4),
+            norm_cost=round(s.norm_cost, 4),
+            health_score=round(s.health_score, 4),
+            fit_score=round(s.fit_score, 4),
+            circuit_status=s.circuit_status.value,
+        )
+        for s in ranked
+    ]
+
+    return EvaluateRoutingResponse(
+        selected_primary_gateway=ranked[0].gateway_id,
+        ranked_gateways=score_items,
+    )
+
 

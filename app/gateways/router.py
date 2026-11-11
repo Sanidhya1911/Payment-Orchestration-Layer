@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.core.enums import CircuitBreakerStatus
 from app.gateways.base import GatewayAuthRequest, GatewayAuthResponse, PaymentGateway
@@ -15,27 +15,71 @@ from app.gateways.razorpay import RazorpayGateway
 from app.gateways.stripe import StripeGateway
 from app.gateways.upi import UPIGateway
 from app.services.circuit_breaker import CircuitBreakerRegistry, circuit_breaker_registry
+from app.services.scoring import (
+    GatewayMetrics,
+    MultiCriteriaScorer,
+    ScoreBreakdown,
+)
 
 logger = logging.getLogger("payment_layer.gateway_router")
 
 
-class ResilientGatewayRouter:
+# Default Operational Benchmarks for Initialized Gateways
+DEFAULT_GATEWAY_BENCHMARKS: Dict[str, Dict[str, Any]] = {
+    "upi": {
+        "success_rate": 0.98,
+        "p95_latency_ms": 120.0,
+        "cost_basis_points": 0.0,  # 0% MDR for UPI
+        "supported_methods": {"UPI"},
+        "supported_currencies": {"INR"},
+    },
+    "razorpay": {
+        "success_rate": 0.96,
+        "p95_latency_ms": 220.0,
+        "cost_basis_points": 180.0,  # 1.8%
+        "supported_methods": {"CARD", "UPI", "NETBANKING", "WALLET"},
+        "supported_currencies": {"INR", "USD", "EUR"},
+    },
+    "stripe": {
+        "success_rate": 0.99,
+        "p95_latency_ms": 320.0,
+        "cost_basis_points": 290.0,  # 2.9%
+        "supported_methods": {"CARD", "WALLET"},
+        "supported_currencies": {"USD", "EUR", "GBP", "INR", "SGD", "AED"},
+    },
+    "payu": {
+        "success_rate": 0.95,
+        "p95_latency_ms": 250.0,
+        "cost_basis_points": 150.0,  # 1.5%
+        "supported_methods": {"CARD", "NETBANKING", "UPI"},
+        "supported_currencies": {"INR"},
+    },
+}
+
+
+class GatewayRouter:
     """
-    High-availability Payment Gateway Router integrating Circuit Breakers.
+    Intelligent Payment Gateway Router driven by Multi-Criteria Scoring & Circuit Breakers.
     
-    Architectural Behavior:
-    - Evaluates gateways in configured priority order.
-    - Wraps every gateway invocation in its dedicated CircuitBreaker.
-    - If a primary gateway repeatedly times out, it trips to OPEN.
-    - In OPEN state, the circuit breaker FAILS-FAST (<1ms), instantly routing traffic
-      to the next alternate gateway.
-    - Within 2 seconds, the tripped gateway transitions to HALF_OPEN, allowing canary probes.
+    Formula:
+    Score = (W_success * NormSuccess)
+          + (W_latency * (1 - NormLatency))
+          + (W_cost * (1 - NormCost))
+          + (W_health * HealthScore)
+          + (W_fit * FitScore)
+          
+    Automatic Failover Behavior:
+    - Calculates dynamic scores for all candidate gateways.
+    - Evaluates in descending order of dynamic multi-criteria score.
+    - If the primary gateway fails or its circuit breaker is OPEN, the router
+      automatically fails over to the next-highest scoring gateway.
     """
 
     def __init__(
         self,
         registry: Optional[CircuitBreakerRegistry] = None,
         gateways: Optional[Dict[str, PaymentGateway]] = None,
+        scorer: Optional[MultiCriteriaScorer] = None,
     ):
         self.circuit_breakers = registry or circuit_breaker_registry
         self.gateways: Dict[str, PaymentGateway] = gateways or {
@@ -44,106 +88,206 @@ class ResilientGatewayRouter:
             "payu": PayUGateway(),
             "upi": UPIGateway(),
         }
+        self.scorer = scorer or MultiCriteriaScorer()
+        self._metrics: Dict[str, GatewayMetrics] = {}
+        self._init_default_metrics()
 
-    def register_gateway(self, gateway: PaymentGateway) -> None:
-        """Registers a custom payment gateway adapter."""
-        self.gateways[gateway.gateway_id.lower().strip()] = gateway
+    def _init_default_metrics(self) -> None:
+        """Initializes default telemetry benchmarks for registered gateways."""
+        for gid, bench in DEFAULT_GATEWAY_BENCHMARKS.items():
+            self._metrics[gid] = GatewayMetrics(
+                gateway_id=gid,
+                success_rate=bench["success_rate"],
+                p95_latency_ms=bench["p95_latency_ms"],
+                cost_basis_points=bench["cost_basis_points"],
+                supported_methods=bench["supported_methods"],
+                supported_currencies=bench["supported_currencies"],
+            )
+
+    def register_gateway(
+        self,
+        gateway: PaymentGateway,
+        metrics: Optional[GatewayMetrics] = None,
+    ) -> None:
+        """Registers a payment gateway and its operational metrics."""
+        gid = gateway.gateway_id.lower().strip()
+        self.gateways[gid] = gateway
+        if metrics:
+            self._metrics[gid] = metrics
+        elif gid not in self._metrics:
+            self._metrics[gid] = GatewayMetrics(
+                gateway_id=gid,
+                success_rate=0.95,
+                p95_latency_ms=250.0,
+                cost_basis_points=200.0,
+                supported_methods={"CARD"},
+                supported_currencies={"USD", "INR"},
+            )
+
+    def set_gateway_metrics(self, gateway_id: str, metrics: GatewayMetrics) -> None:
+        """Sets custom or updated metrics for a gateway."""
+        self._metrics[gateway_id.lower().strip()] = metrics
+
+    def get_gateway_metrics(self, gateway_id: str) -> Optional[GatewayMetrics]:
+        """Retrieves current metrics for a gateway."""
+        return self._metrics.get(gateway_id.lower().strip())
 
     def get_circuit_breaker_status(self, gateway_id: str) -> CircuitBreakerStatus:
         """Returns the current Circuit Breaker status for a gateway."""
         return self.circuit_breakers.get(gateway_id).state
 
-    async def execute_with_failover(
+    def rank_gateways(
         self,
         request: GatewayAuthRequest,
-        priority_gateways: Optional[List[str]] = None,
-    ) -> Tuple[GatewayAuthResponse, str, List[Dict[str, str]]]:
+        candidate_ids: Optional[List[str]] = None,
+    ) -> List[ScoreBreakdown]:
         """
-        Executes payment authorization with automatic circuit-breaker failover:
-        - Tries gateways in order of priority.
-        - If a gateway's circuit breaker is OPEN, it fails-fast immediately and attempts the next alternate.
-        - If a gateway encounters a timeout or 5xx, it records the failure on the circuit breaker and falls over.
-        - Returns: (successful_response, successful_gateway_id, routing_trace)
+        Dynamically calculates multi-criteria scores for candidate gateways and returns
+        them ranked in descending order (highest score first).
         """
-        candidate_gateways = priority_gateways or ["razorpay", "stripe", "payu", "upi"]
-        routing_trace: List[Dict[str, str]] = []
+        target_ids = [gid.lower().strip() for gid in (candidate_ids or list(self.gateways.keys()))]
+        candidates: List[GatewayMetrics] = []
 
-        last_exception: Optional[Exception] = None
-
-        for gw_name in candidate_gateways:
-            gw_id = gw_name.lower().strip()
-            gateway = self.gateways.get(gw_id)
-            if not gateway:
-                logger.warning("Gateway '%s' requested in route but not registered", gw_id)
+        for gid in target_ids:
+            if gid not in self.gateways:
                 continue
 
+            base_metrics = self._metrics.get(gid)
+            if not base_metrics:
+                base_metrics = GatewayMetrics(
+                    gateway_id=gid,
+                    success_rate=0.95,
+                    p95_latency_ms=250.0,
+                    cost_basis_points=200.0,
+                )
+
+            # Synchronize with live circuit breaker state
+            cb = self.circuit_breakers.get(gid)
+            live_metrics = GatewayMetrics(
+                gateway_id=gid,
+                success_rate=base_metrics.success_rate,
+                p95_latency_ms=base_metrics.p95_latency_ms,
+                cost_basis_points=base_metrics.cost_basis_points,
+                supported_methods=base_metrics.supported_methods,
+                supported_currencies=base_metrics.supported_currencies,
+                circuit_status=cb.state,
+                consecutive_failures=cb.consecutive_failures,
+            )
+            candidates.append(live_metrics)
+
+        return self.scorer.score_candidates(
+            candidates=candidates,
+            requested_method=request.payment_method,
+            requested_currency=request.currency,
+        )
+
+    async def route_and_execute(
+        self,
+        request: GatewayAuthRequest,
+        candidate_ids: Optional[List[str]] = None,
+    ) -> Tuple[GatewayAuthResponse, str, List[Dict[str, Any]]]:
+        """
+        Core multi-criteria dynamic routing algorithm with failover:
+        1. Ranks all candidates using the multi-criteria formula.
+        2. Tries the highest-scoring gateway (Primary).
+        3. If the primary fails or its circuit breaker is OPEN, automatically
+           fails over to the next-highest scoring gateway.
+        """
+        ranked_scores = self.rank_gateways(request, candidate_ids)
+        if not ranked_scores:
+            raise GatewayException(
+                message=f"No viable payment gateways configured for transaction {request.transaction_id}",
+                error_code="NO_CANDIDATE_GATEWAYS",
+            )
+
+        logger.info(
+            "Transaction %s candidate rankings: %s",
+            request.transaction_id,
+            [(s.gateway_id, round(s.total_score, 4)) for s in ranked_scores],
+        )
+
+        routing_trace: List[Dict[str, Any]] = []
+        last_exception: Optional[Exception] = None
+
+        for ranking in ranked_scores:
+            gw_id = ranking.gateway_id
+            gateway = self.gateways[gw_id]
             breaker = self.circuit_breakers.get(gw_id)
+
+            trace_entry = {
+                "gateway": gw_id,
+                "score": round(ranking.total_score, 4),
+                "score_breakdown": ranking.to_dict(),
+                "circuit_state": breaker.state.value,
+            }
 
             try:
                 logger.info(
-                    "Routing transaction %s to gateway '%s' (circuit state: %s)",
-                    request.transaction_id,
+                    "Attempting gateway '%s' (Score: %.4f, Circuit: %s) for txn %s",
                     gw_id,
+                    ranking.total_score,
                     breaker.state.value,
+                    request.transaction_id,
                 )
 
                 # Execute through Circuit Breaker (fails fast if OPEN)
                 response = await breaker.call(gateway.authorize, request)
 
-                routing_trace.append({
-                    "gateway": gw_id,
-                    "status": "SUCCESS",
-                    "circuit_state": breaker.state.value,
-                })
+                trace_entry["status"] = "SUCCESS"
+                routing_trace.append(trace_entry)
                 return response, gw_id, routing_trace
 
             except CircuitBreakerOpenException as exc:
-                # FAST FAIL (<1ms): Circuit is OPEN. Immediately fall over to next alternate gateway!
+                # Primary circuit breaker is OPEN: fast-fail (<1ms) -> failover to next-highest scoring!
                 logger.warning(
-                    "Gateway '%s' circuit is OPEN (fails-fast). Immediate failover initiated: %s",
+                    "Gateway '%s' circuit is OPEN. Failing over to next-highest scoring gateway: %s",
                     gw_id,
                     str(exc),
                 )
-                routing_trace.append({
-                    "gateway": gw_id,
-                    "status": "CIRCUIT_OPEN_FAST_FAIL",
-                    "reason": str(exc),
-                })
+                trace_entry["status"] = "CIRCUIT_OPEN_FAST_FAIL"
+                trace_entry["reason"] = str(exc)
+                routing_trace.append(trace_entry)
                 last_exception = exc
                 continue
 
             except (GatewayTimeoutException, GatewayServiceUnavailableException) as exc:
-                # Gateway timed out or was unavailable. Circuit breaker recorded failure. Fall over!
+                # Primary gateway failed with timeout or 5xx: failover to next-highest scoring!
                 logger.warning(
-                    "Gateway '%s' failed with error (%s). Falling over to next gateway.",
+                    "Gateway '%s' execution failed (%s). Failing over to next-highest scoring gateway.",
                     gw_id,
                     type(exc).__name__,
                 )
-                routing_trace.append({
-                    "gateway": gw_id,
-                    "status": "GATEWAY_FAILED",
-                    "reason": str(exc),
-                })
+                trace_entry["status"] = "GATEWAY_FAILED"
+                trace_entry["reason"] = str(exc)
+                routing_trace.append(trace_entry)
                 last_exception = exc
                 continue
 
             except GatewayDeclinedException as exc:
-                # Business decline from issuing bank (insufficient funds, wrong PIN)
-                # Does NOT trip the circuit breaker; declines are terminal business decisions
-                routing_trace.append({
-                    "gateway": gw_id,
-                    "status": "DECLINED",
-                    "reason": str(exc),
-                })
+                # Business decline from card issuer (insufficient funds, wrong PIN)
+                # Does NOT trigger route failover
+                trace_entry["status"] = "DECLINED"
+                trace_entry["reason"] = str(exc)
+                routing_trace.append(trace_entry)
                 raise exc
 
-        # If all candidates exhausted
         raise GatewayException(
             message=f"All candidate gateways failed for transaction {request.transaction_id}. "
             f"Routing trace: {routing_trace}",
             error_code="ALL_GATEWAYS_FAILED",
         ) from last_exception
 
+    async def execute_with_failover(
+        self,
+        request: GatewayAuthRequest,
+        priority_gateways: Optional[List[str]] = None,
+    ) -> Tuple[GatewayAuthResponse, str, List[Dict[str, Any]]]:
+        """Backward-compatible entrypoint delegating to dynamic multi-criteria routing."""
+        return await self.route_and_execute(request=request, candidate_ids=priority_gateways)
+
+
+# Aliases for architectural clarity
+ResilientGatewayRouter = GatewayRouter
 
 # Global singleton router
-gateway_router = ResilientGatewayRouter()
+gateway_router = GatewayRouter()

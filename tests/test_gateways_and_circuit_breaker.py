@@ -287,3 +287,4 @@ async def test_router_fails_over_to_alternate_gateway_when_primary_trips(sample_
     assert trace[0]["status"] == "CIRCUIT_OPEN_FAST_FAIL"
     assert trace[1]["gateway"] == "stripe"
     assert trace[1]["status"] == "SUCCESS"
+

@@ -16,7 +16,7 @@ from app.gateways.exceptions import (
 )
 from app.gateways.payu import PayUGateway
 from app.gateways.razorpay import RazorpayGateway
-from app.gateways.router import ResilientGatewayRouter, gateway_router
+from app.gateways.router import GatewayRouter, ResilientGatewayRouter, gateway_router
 from app.gateways.stripe import StripeGateway
 from app.gateways.upi import UPIGateway
 
@@ -38,5 +38,7 @@ __all__ = [
     "PayUGateway",
     "UPIGateway",
     "ResilientGatewayRouter",
+    "GatewayRouter",
     "gateway_router",
 ]
+

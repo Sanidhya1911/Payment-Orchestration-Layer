@@ -146,3 +146,4 @@ class PaymentGateway(abc.ABC):
                 gateway_id=self.gateway_id,
                 error_code="CONNECTION_RESET",
             )
+

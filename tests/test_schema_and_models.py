@@ -144,3 +144,4 @@ def test_fastapi_app_routes():
     assert "/api/v1/gateways" in paths
     assert "/api/v1/gateways/routes" in paths
     assert "/api/v1/gateways/routing-configs" in paths
+    assert "/api/v1/gateways/evaluate-routing" in paths
