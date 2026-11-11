@@ -1,16 +1,30 @@
 from enum import Enum
 
 
-class TransactionStatus(str, Enum):
-    INITIATED = "INITIATED"
-    PENDING = "PENDING"
-    AUTHORIZED = "AUTHORIZED"
+class TransactionState(str, Enum):
+    """
+    Deterministic 12-state transaction life-cycle states.
+    All transitions must adhere to the deterministic state machine graph.
+    """
+    CREATED = "CREATED"
+    ROUTE_SELECTED = "ROUTE_SELECTED"
+    AUTH_INITIATED = "AUTH_INITIATED"
+    AUTHORISED = "AUTHORISED"
+    AUTH_FAILED = "AUTH_FAILED"
+    CAPTURE_INITIATED = "CAPTURE_INITIATED"
     CAPTURED = "CAPTURED"
-    SETTLED = "SETTLED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
+    PARTIALLY_CAPTURED = "PARTIALLY_CAPTURED"
+    CAPTURE_FAILED = "CAPTURE_FAILED"
+    REFUND_INITIATED = "REFUND_INITIATED"
     REFUNDED = "REFUNDED"
-    PARTIALLY_REFUNDED = "PARTIALLY_REFUNDED"
+    FAILED = "FAILED"
+
+    # Alias for spelling interoperability
+    AUTHORIZED = "AUTHORISED"
+
+
+# Canonical alias for compatibility
+TransactionStatus = TransactionState
 
 
 class PaymentMethod(str, Enum):
@@ -33,10 +47,15 @@ class Currency(str, Enum):
 
 class StateTrigger(str, Enum):
     API_REQUEST = "API_REQUEST"
+    ROUTE_SELECTED = "ROUTE_SELECTED"
+    GATEWAY_CALL = "GATEWAY_CALL"
     GATEWAY_WEBHOOK = "GATEWAY_WEBHOOK"
+    GATEWAY_RESPONSE = "GATEWAY_RESPONSE"
+    GATEWAY_TIMEOUT = "GATEWAY_TIMEOUT"
     RECONCILIATION_JOB = "RECONCILIATION_JOB"
     TIMEOUT_SWEEPER = "TIMEOUT_SWEEPER"
     MANUAL_OVERRIDE = "MANUAL_OVERRIDE"
+    CLIENT_CANCEL = "CLIENT_CANCEL"
 
 
 class GatewayType(str, Enum):
@@ -80,4 +99,3 @@ class IdempotencyStatus(str, Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-

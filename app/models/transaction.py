@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     func,
@@ -13,7 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
-from app.core.enums import TransactionStatus
+from app.core.enums import TransactionState, TransactionStatus
 from app.models.base import TimestampMixin, UUIDPrimaryKeyMixin
 
 
@@ -85,7 +86,7 @@ class Transactions(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     status: Mapped[str] = mapped_column(
         String(50),
-        default=TransactionStatus.INITIATED.value,
+        default=TransactionState.CREATED.value,
         nullable=False,
         index=True
     )
@@ -158,7 +159,7 @@ class TransactionStateLog(Base):
     )
 
     id: Mapped[int] = mapped_column(
-        BigInteger,
+        BigInteger().with_variant(Integer, "sqlite"),
         primary_key=True,
         autoincrement=True,
         comment="Sequential 64-bit monotonically increasing log ID"

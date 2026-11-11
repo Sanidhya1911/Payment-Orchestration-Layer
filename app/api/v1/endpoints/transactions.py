@@ -9,12 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_async_db
-from app.core.enums import IdempotencyStatus, StateTrigger, TransactionStatus
+from app.core.enums import IdempotencyStatus, StateTrigger, TransactionState, TransactionStatus
 from app.models.idempotency import IdempotencyKeys
 from app.models.transaction import Transactions, TransactionStateLog
 from app.schemas.transaction import (
     TransactionCreateRequest,
     TransactionResponse,
+    TransactionTransitionRequest,
+)
+from app.services.state_machine import (
+    InvalidStateTransitionException,
+    TransactionNotFoundException,
+    TransactionStateMachine,
 )
 
 router = APIRouter()
@@ -85,7 +91,7 @@ async def create_transaction(
         customer_id=payload.customer_id,
         amount=payload.amount,  # integer paise/cents
         currency=payload.currency,
-        status=TransactionStatus.INITIATED.value,
+        status=TransactionState.CREATED.value,
         payment_method=payload.payment_method.value,
         payment_method_details=payload.payment_method_details,
         metadata_=payload.metadata,
@@ -97,7 +103,7 @@ async def create_transaction(
     state_log = TransactionStateLog(
         transaction_id=transaction.id,
         from_state=None,
-        to_state=TransactionStatus.INITIATED.value,
+        to_state=TransactionState.CREATED.value,
         trigger=StateTrigger.API_REQUEST.value,
         actor_id=payload.merchant_id,
         gateway_payload=None,
@@ -147,4 +153,54 @@ async def get_transaction(
             detail=f"Transaction {transaction_id} not found."
         )
     return transaction
+
+
+@router.post("/{transaction_id}/transitions", response_model=TransactionResponse, status_code=status.HTTP_200_OK)
+async def transition_transaction(
+    transaction_id: uuid.UUID,
+    payload: TransactionTransitionRequest,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """
+    Executes a deterministic state machine transition on a transaction.
+    Enforces pessimistic locking (SELECT FOR UPDATE) and automatically writes
+    an immutable audit log into transaction_state_log.
+    """
+    sm = TransactionStateMachine()
+    try:
+        await sm.transition(
+            transaction_id=transaction_id,
+            target_state=payload.target_state,
+            trigger=payload.trigger,
+            actor_id=payload.actor_id,
+            gateway_payload=payload.gateway_payload,
+            transition_metadata=payload.transition_metadata,
+            gateway_id=payload.gateway_id,
+            gateway_transaction_id=payload.gateway_transaction_id,
+            gateway_reference_id=payload.gateway_reference_id,
+            error_code=payload.error_code,
+            error_message=payload.error_message,
+            session=db,
+        )
+
+        # Refresh transaction with eagerly loaded state logs
+        stmt = (
+            select(Transactions)
+            .options(selectinload(Transactions.state_logs))
+            .where(Transactions.id == transaction_id)
+        )
+        res = await db.execute(stmt)
+        return res.scalar_one()
+
+    except InvalidStateTransitionException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc)
+        )
+    except TransactionNotFoundException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc)
+        )
+
 

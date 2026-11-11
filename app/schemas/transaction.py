@@ -2,7 +2,21 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from app.core.enums import PaymentMethod, StateTrigger, TransactionStatus
+from app.core.enums import PaymentMethod, StateTrigger, TransactionState, TransactionStatus
+
+
+class TransactionTransitionRequest(BaseModel):
+    """Payload to trigger an explicit state machine transition."""
+    target_state: TransactionState
+    trigger: StateTrigger
+    actor_id: str = Field(..., max_length=100)
+    gateway_payload: Optional[Dict[str, Any]] = None
+    transition_metadata: Optional[Dict[str, Any]] = None
+    gateway_id: Optional[str] = None
+    gateway_transaction_id: Optional[str] = None
+    gateway_reference_id: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class TransactionCreateRequest(BaseModel):

@@ -182,7 +182,7 @@ def upgrade() -> None:
         sa.Column('fee_amount', sa.BigInteger(), server_default='0', nullable=False, comment='Strict BIGINT fee in minor units'),
         sa.Column('tax_amount', sa.BigInteger(), server_default='0', nullable=False, comment='Strict BIGINT tax in minor units'),
         sa.Column('refunded_amount', sa.BigInteger(), server_default='0', nullable=False, comment='Strict BIGINT refund in minor units'),
-        sa.Column('status', sa.String(length=50), server_default='INITIATED', nullable=False),
+        sa.Column('status', sa.String(length=50), server_default='CREATED', nullable=False),
         sa.Column('payment_method', sa.String(length=50), nullable=False),
         sa.Column('payment_method_details', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('gateway_id', sa.String(length=50), nullable=True),
