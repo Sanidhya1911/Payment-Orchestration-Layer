@@ -16,14 +16,20 @@ Designed by following strict financial engineering standards (zero float toleran
 ### 2. Immutable State Transition Audit Trail
 > **MANDATE**: The `transaction_state_log` is an append-only ledger.
 - Zero in-place updates: rows are never modified once written (`updated_at` column is forbidden).
-- Every state shift (`INITIATED` -> `PENDING` -> `AUTHORIZED` -> `CAPTURED` -> `SETTLED` / `FAILED`) captures the triggering actor, source event (API, Webhook, Sweeper, Reconciler), and raw sanitized payload.
+- Every state shift captures the previous state, new state, triggering actor, source event (API, Webhook, Sweeper, Reconciler), and raw sanitized gateway payload.
 
-### 3. Asynchronous Webhook Deduplication Engine
+### 3. Deterministic Transaction State Machine & Lock Isolation
+> **MANDATE**: Enforces 12 strict transaction states with deterministic transition rules.
+- Throws `InvalidStateTransitionException` if an illegal transition is attempted (e.g., `CREATED` directly to `REFUNDED`).
+- Uses pessimistic row locking (`SELECT ... FOR UPDATE`) during transitions.
+- **Lock Release Rule**: The database lock is **strictly committed and released BEFORE invoking external gateway API calls**, preventing connection pool starvation, thread blocking, and database lock exhaustion during upstream PSP latency.
+
+### 4. Asynchronous Webhook Deduplication Engine
 > **MANDATE**: `processed_webhook_events` strictly uses a **Composite Primary Key** of `(gateway, event_id)`.
 - Eliminates duplicate processing of webhook retries from upstream PSPs (e.g., Stripe, Razorpay, Adyen).
 - Guarantees exactly-once asynchronous state reconciliation.
 
-### 4. Distributed Idempotency Engine
+### 5. Distributed Idempotency Engine
 > **MANDATE**: `idempotency_keys` enforces distributed lease locking on incoming transaction requests.
 - Caches HTTP status codes and responses for repeat submissions with identical payloads.
 - Rejects concurrent double-clicks or collisions with `409 Conflict` (`Retry-After`).
@@ -163,6 +169,98 @@ erDiagram
         timestamptz last_heartbeat_at
         timestamptz created_at
     }
+```
+
+---
+
+## 🔄 Deterministic Transaction State Machine
+
+### The 12 Strict Transaction States
+1. `CREATED`: Transaction entity initialized in ledger.
+2. `ROUTE_SELECTED`: Target gateway determined by smart routing engine.
+3. `AUTH_INITIATED`: In-flight state before initiating gateway authorization call.
+4. `AUTHORISED`: Gateway authorization confirmed and funds reserved.
+5. `AUTH_FAILED`: Gateway authorization declined (card expired, 3DS failed, fraud reject).
+6. `CAPTURE_INITIATED`: In-flight state before initiating capture request.
+7. `CAPTURED`: Full transaction amount captured and settled.
+8. `PARTIALLY_CAPTURED`: A partial amount of the authorization was captured.
+9. `CAPTURE_FAILED`: Capture attempt rejected by issuing bank.
+10. `REFUND_INITIATED`: In-flight state before initiating refund/void request.
+11. `REFUNDED`: Terminal state; full/partial refund settled.
+12. `FAILED`: Terminal unrecoverable failure state.
+
+### State Transition Graph
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> ROUTE_SELECTED
+    CREATED --> FAILED
+    
+    ROUTE_SELECTED --> AUTH_INITIATED
+    ROUTE_SELECTED --> FAILED
+    
+    AUTH_INITIATED --> AUTHORISED: Gateway Success
+    AUTH_INITIATED --> AUTH_FAILED: Gateway Declined
+    AUTH_INITIATED --> FAILED: Gateway 5xx/Timeout
+    
+    AUTH_FAILED --> ROUTE_SELECTED: Failover Retry
+    AUTH_FAILED --> FAILED: Terminal Failure
+    
+    AUTHORISED --> CAPTURE_INITIATED
+    AUTHORISED --> REFUND_INITIATED: Void / Auth Reversal
+    AUTHORISED --> FAILED: Auth Expired
+    
+    CAPTURE_INITIATED --> CAPTURED: Full Settlement
+    CAPTURE_INITIATED --> PARTIALLY_CAPTURED: Partial Amount
+    CAPTURE_INITIATED --> CAPTURE_FAILED: Bank Decline
+    CAPTURE_INITIATED --> FAILED: Critical Error
+    
+    CAPTURE_FAILED --> CAPTURE_INITIATED: Retry Capture
+    CAPTURE_FAILED --> FAILED: Terminal
+    
+    CAPTURED --> REFUND_INITIATED
+    
+    PARTIALLY_CAPTURED --> CAPTURE_INITIATED: Capture Balance
+    PARTIALLY_CAPTURED --> REFUND_INITIATED: Refund Captured
+    
+    REFUND_INITIATED --> REFUNDED: Settlement Confirmed
+    REFUND_INITIATED --> CAPTURED: Refund Declined (Revert)
+    REFUND_INITIATED --> PARTIALLY_CAPTURED: Refund Declined (Revert)
+    REFUND_INITIATED --> FAILED: Terminal
+    
+    REFUNDED --> [*]
+    FAILED --> [*]
+```
+
+### Pessimistic Locking & Lock Release Pattern
+Holding row locks during upstream HTTP API calls (e.g., Stripe/Adyen/Razorpay) causes connection pool exhaustion, contention, and cascading deadlocks. The `TransactionStateMachine` enforces a two-phase lock release pattern:
+
+```python
+from app.services.state_machine import TransactionStateMachine
+from app.core.enums import TransactionState, StateTrigger
+
+sm = TransactionStateMachine()
+
+# Phase 1: Lock acquired (SELECT ... FOR UPDATE), state moved to AUTH_INITIATED,
+#          state log written, COMMIT executed -> ROW LOCK IS RELEASED!
+async with sm.gateway_transition_scope(
+    transaction_id=txn_id,
+    in_flight_state=TransactionState.AUTH_INITIATED,
+    trigger=StateTrigger.GATEWAY_CALL,
+    actor_id="service:payment_processor",
+) as scope:
+    
+    # Phase 2: Gateway API executed with ZERO database locks held!
+    gateway_response = await psp_client.authorize(amount=txn.amount, currency=txn.currency)
+    
+    scope.set_success(
+        target_state=TransactionState.AUTHORISED,
+        gateway_payload=gateway_response.raw_data,
+        gateway_transaction_id=gateway_response.charge_id,
+    )
+
+# Phase 3: Lock re-acquired, state moved to AUTHORISED, state log written,
+#          COMMIT executed -> ROW LOCK RELEASED.
 ```
 
 ---
