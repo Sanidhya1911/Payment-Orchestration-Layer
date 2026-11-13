@@ -1,4 +1,3 @@
-from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,8 +21,8 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT: int = Field(default=30)
 
     # Computed connection strings
-    DATABASE_URL: Optional[str] = None
-    SYNC_DATABASE_URL: Optional[str] = None
+    DATABASE_URL: str | None = None
+    SYNC_DATABASE_URL: str | None = None
 
     # Webhook Secrets for HMAC-SHA256 Verification
     RAZORPAY_WEBHOOK_SECRET: str = Field(default="rzp_sec_live_test_webhook_secret_key_32")
@@ -32,10 +31,7 @@ class Settings(BaseSettings):
     UPI_WEBHOOK_SECRET: str = Field(default="upi_sec_live_test_webhook_secret_key_32")
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
     )
 
     def get_async_db_url(self) -> str:
@@ -50,4 +46,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

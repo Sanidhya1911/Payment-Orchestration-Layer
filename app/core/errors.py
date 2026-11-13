@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
+
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -29,13 +30,14 @@ class PaymentAPIException(HTTPException):
     Standardized API exception structured strictly for uniform error formatting:
     error.code, error.message, details.gateway_error_code.
     """
+
     def __init__(
         self,
         status_code: int,
         code: str,
         message: str,
-        gateway_error_code: Optional[str] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        gateway_error_code: str | None = None,
+        extra: dict[str, Any] | None = None,
     ):
         self.code = code
         self.message = message
@@ -53,9 +55,9 @@ class PaymentAPIException(HTTPException):
 def format_uniform_error_dict(
     code: str,
     message: str,
-    gateway_error_code: Optional[str] = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    gateway_error_code: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Constructs the uniform error dictionary according to strict specification:
     {
@@ -69,7 +71,7 @@ def format_uniform_error_dict(
         "detail": message
     }
     """
-    details: Dict[str, Any] = {"gateway_error_code": gateway_error_code}
+    details: dict[str, Any] = {"gateway_error_code": gateway_error_code}
     if extra:
         details["extra"] = extra
 
@@ -135,7 +137,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(GatewayServiceUnavailableException)
-    async def gateway_unavailable_handler(request: Request, exc: GatewayServiceUnavailableException):
+    async def gateway_unavailable_handler(
+        request: Request, exc: GatewayServiceUnavailableException
+    ):
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content=format_uniform_error_dict(
@@ -193,7 +197,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             headers={"Retry-After": "2"},
             content=format_uniform_error_dict(
                 code="IDEMPOTENCY_CONFLICT",
-                message=exc.detail if isinstance(exc.detail, str) else "Concurrent request with same idempotency key in progress.",
+                message=(
+                    exc.detail
+                    if isinstance(exc.detail, str)
+                    else "Concurrent request with same idempotency key in progress."
+                ),
                 gateway_error_code=None,
             ),
         )
@@ -204,7 +212,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content=format_uniform_error_dict(
                 code="IDEMPOTENCY_PAYLOAD_MISMATCH",
-                message=exc.detail if isinstance(exc.detail, str) else "Idempotency key reused with altered payload.",
+                message=(
+                    exc.detail
+                    if isinstance(exc.detail, str)
+                    else "Idempotency key reused with altered payload."
+                ),
                 gateway_error_code=None,
             ),
         )
@@ -215,7 +227,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             content=format_uniform_error_dict(
                 code="INVALID_IDEMPOTENCY_KEY",
-                message=exc.detail if isinstance(exc.detail, str) else "Invalid Idempotency-Key UUID header.",
+                message=(
+                    exc.detail
+                    if isinstance(exc.detail, str)
+                    else "Invalid Idempotency-Key UUID header."
+                ),
                 gateway_error_code=None,
             ),
         )
@@ -226,7 +242,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content=format_uniform_error_dict(
                 code="VALIDATION_ERROR",
-                message=f"Request schema validation failed: {str(exc.errors())}",
+                message=f"Request schema validation failed: {exc.errors()!s}",
                 gateway_error_code=None,
                 extra={"errors": exc.errors()},
             ),
@@ -263,4 +279,3 @@ def register_exception_handlers(app: FastAPI) -> None:
             headers=exc.headers,
             content=content,
         )
-

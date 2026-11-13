@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 
@@ -72,34 +73,32 @@ async def test_processing_status_returns_409_conflict(test_session_maker):
     payload = {"amount": 50000, "currency": "INR"}
 
     # 1. First request arrives -> status becomes 'PROCESSING'
-    async with test_session_maker() as session:
-        async with session.begin():
-            res1 = await service.process_or_acquire(
+    async with test_session_maker() as session, session.begin():
+        res1 = await service.process_or_acquire(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            request_path=path,
+            payload=payload,
+        )
+        assert res1.is_cached is False
+        assert res1.key_record.status == IdempotencyStatus.PROCESSING.value
+
+    # 2. Second concurrent request arrives with exact same key -> MUST raise 409 Conflict
+    async with test_session_maker() as session, session.begin():
+        with pytest.raises(IdempotencyConflictException) as exc_info:
+            await service.process_or_acquire(
                 session=session,
                 key=key,
                 merchant_id=merchant_id,
                 request_path=path,
                 payload=payload,
             )
-            assert res1.is_cached is False
-            assert res1.key_record.status == IdempotencyStatus.PROCESSING.value
 
-    # 2. Second concurrent request arrives with exact same key -> MUST raise 409 Conflict
-    async with test_session_maker() as session:
-        async with session.begin():
-            with pytest.raises(IdempotencyConflictException) as exc_info:
-                await service.process_or_acquire(
-                    session=session,
-                    key=key,
-                    merchant_id=merchant_id,
-                    request_path=path,
-                    payload=payload,
-                )
-
-            err = exc_info.value
-            assert err.status_code == 409
-            assert "PROCESSING" in err.detail
-            assert err.headers.get("Retry-After") == "2"
+        err = exc_info.value
+        assert err.status_code == 409
+        assert "PROCESSING" in err.detail
+        assert err.headers.get("Retry-After") == "2"
 
 
 @pytest.mark.anyio
@@ -120,39 +119,37 @@ async def test_completed_status_returns_cached_json_response(test_session_maker)
     }
 
     # 1. Initial request -> PROCESSING
-    async with test_session_maker() as session:
-        async with session.begin():
-            await service.process_or_acquire(
-                session=session,
-                key=key,
-                merchant_id=merchant_id,
-                request_path=path,
-                payload=payload,
-            )
-            # Transaction finishes successfully -> transition to COMPLETED
-            await service.save_response(
-                session=session,
-                key=key,
-                merchant_id=merchant_id,
-                response_code=201,
-                response_body=expected_response_json,
-                response_headers={"X-Trace-Id": "trace-1234"},
-            )
+    async with test_session_maker() as session, session.begin():
+        await service.process_or_acquire(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            request_path=path,
+            payload=payload,
+        )
+        # Transaction finishes successfully -> transition to COMPLETED
+        await service.save_response(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            response_code=201,
+            response_body=expected_response_json,
+            response_headers={"X-Trace-Id": "trace-1234"},
+        )
 
     # 2. Replay request -> Returns cached JSON response without reprocessing!
-    async with test_session_maker() as session:
-        async with session.begin():
-            res = await service.process_or_acquire(
-                session=session,
-                key=key,
-                merchant_id=merchant_id,
-                request_path=path,
-                payload=payload,
-            )
-            assert res.is_cached is True
-            assert res.response_code == 201
-            assert res.response_body == expected_response_json
-            assert res.response_headers == {"X-Trace-Id": "trace-1234"}
+    async with test_session_maker() as session, session.begin():
+        res = await service.process_or_acquire(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            request_path=path,
+            payload=payload,
+        )
+        assert res.is_cached is True
+        assert res.response_code == 201
+        assert res.response_body == expected_response_json
+        assert res.response_headers == {"X-Trace-Id": "trace-1234"}
 
 
 @pytest.mark.anyio
@@ -167,29 +164,27 @@ async def test_reused_key_with_altered_payload_raises_422(test_session_maker):
     path = "/api/v1/transactions"
 
     # 1. First request for ₹500 (50000 paise)
-    async with test_session_maker() as session:
-        async with session.begin():
+    async with test_session_maker() as session, session.begin():
+        await service.process_or_acquire(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            request_path=path,
+            payload={"amount": 50000, "currency": "INR"},
+        )
+
+    # 2. Second request with SAME key but altered amount ₹1000 (100000 paise)
+    async with test_session_maker() as session, session.begin():
+        with pytest.raises(IdempotencyPayloadMismatchException) as exc_info:
             await service.process_or_acquire(
                 session=session,
                 key=key,
                 merchant_id=merchant_id,
                 request_path=path,
-                payload={"amount": 50000, "currency": "INR"},
+                payload={"amount": 100000, "currency": "INR"},  # Tampered payload!
             )
-
-    # 2. Second request with SAME key but altered amount ₹1000 (100000 paise)
-    async with test_session_maker() as session:
-        async with session.begin():
-            with pytest.raises(IdempotencyPayloadMismatchException) as exc_info:
-                await service.process_or_acquire(
-                    session=session,
-                    key=key,
-                    merchant_id=merchant_id,
-                    request_path=path,
-                    payload={"amount": 100000, "currency": "INR"},  # Tampered payload!
-                )
-            assert exc_info.value.status_code == 422
-            assert "different request payload" in exc_info.value.detail
+        assert exc_info.value.status_code == 422
+        assert "different request payload" in exc_info.value.detail
 
 
 @pytest.mark.anyio
@@ -198,43 +193,41 @@ async def test_expire_and_cleanup_idempotency_keys_after_24_hours(test_session_m
     MANDATE: Expire and clean up idempotency keys after 24 hours.
     """
     service = IdempotencyService(session_maker=test_session_maker)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     expired_key = str(uuid.uuid4())
     active_key = str(uuid.uuid4())
     merchant_id = "merch_ttl_test"
 
-    async with test_session_maker() as session:
-        async with session.begin():
-            # 1. Insert an expired record (> 24 hours ago)
-            expired_record = IdempotencyKeys(
-                key=expired_key,
-                merchant_id=merchant_id,
-                request_path="/api/v1/transactions",
-                request_hash="hash_expired",
-                status=IdempotencyStatus.COMPLETED.value,
-                response_code=200,
-                response_body={"msg": "old"},
-                expires_at=now - timedelta(hours=1),  # Expired
-            )
-            # 2. Insert an active record (< 24 hours)
-            active_record = IdempotencyKeys(
-                key=active_key,
-                merchant_id=merchant_id,
-                request_path="/api/v1/transactions",
-                request_hash="hash_active",
-                status=IdempotencyStatus.COMPLETED.value,
-                response_code=200,
-                response_body={"msg": "fresh"},
-                expires_at=now + timedelta(hours=23),  # Active
-            )
-            session.add_all([expired_record, active_record])
+    async with test_session_maker() as session, session.begin():
+        # 1. Insert an expired record (> 24 hours ago)
+        expired_record = IdempotencyKeys(
+            key=expired_key,
+            merchant_id=merchant_id,
+            request_path="/api/v1/transactions",
+            request_hash="hash_expired",
+            status=IdempotencyStatus.COMPLETED.value,
+            response_code=200,
+            response_body={"msg": "old"},
+            expires_at=now - timedelta(hours=1),  # Expired
+        )
+        # 2. Insert an active record (< 24 hours)
+        active_record = IdempotencyKeys(
+            key=active_key,
+            merchant_id=merchant_id,
+            request_path="/api/v1/transactions",
+            request_hash="hash_active",
+            status=IdempotencyStatus.COMPLETED.value,
+            response_code=200,
+            response_body={"msg": "fresh"},
+            expires_at=now + timedelta(hours=23),  # Active
+        )
+        session.add_all([expired_record, active_record])
 
     # 3. Trigger cleanup
-    async with test_session_maker() as session:
-        async with session.begin():
-            pruned_count = await service.cleanup_expired_keys(session=session)
-            assert pruned_count == 1
+    async with test_session_maker() as session, session.begin():
+        pruned_count = await service.cleanup_expired_keys(session=session)
+        assert pruned_count == 1
 
     # 4. Verify expired record is deleted, active record is preserved
     async with test_session_maker() as session:
@@ -255,31 +248,31 @@ async def test_idempotent_scope_context_manager(test_session_maker):
     payload = {"amount": 25000, "currency": "INR"}
 
     # Run 1: Execution proceeds and caches response
-    async with test_session_maker() as session:
-        async with session.begin():
-            async with service.idempotent_scope(
-                session=session,
-                key=key,
-                merchant_id=merchant_id,
-                request_path="/api/v1/transactions",
-                payload=payload,
-            ) as idemp:
-                assert idemp.is_cached is False
-                # Simulate work
-                computed_data = {"transaction_id": "txn_8829", "status": "CREATED"}
-                idemp.set_response(status_code=201, body=computed_data)
+    async with test_session_maker() as session, session.begin():
+        async with service.idempotent_scope(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            request_path="/api/v1/transactions",
+            payload=payload,
+        ) as idemp:
+            assert idemp.is_cached is False
+            # Simulate work
+            computed_data = {"transaction_id": "txn_8829", "status": "CREATED"}
+            idemp.set_response(status_code=201, body=computed_data)
 
     # Run 2: Execution is bypassed, cached response is yielded immediately
-    async with test_session_maker() as session:
-        async with session.begin():
-            async with service.idempotent_scope(
-                session=session,
-                key=key,
-                merchant_id=merchant_id,
-                request_path="/api/v1/transactions",
-                payload=payload,
-            ) as idemp:
-                assert idemp.is_cached is True
-                assert idemp.cached_code == 201
-                assert idemp.cached_response == {"transaction_id": "txn_8829", "status": "CREATED"}
-
+    async with test_session_maker() as session, session.begin():
+        async with service.idempotent_scope(
+            session=session,
+            key=key,
+            merchant_id=merchant_id,
+            request_path="/api/v1/transactions",
+            payload=payload,
+        ) as idemp:
+            assert idemp.is_cached is True
+            assert idemp.cached_code == 201
+            assert idemp.cached_response == {
+                "transaction_id": "txn_8829",
+                "status": "CREATED",
+            }

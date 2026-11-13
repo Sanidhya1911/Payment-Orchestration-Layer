@@ -2,8 +2,10 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +16,7 @@ from app.models.webhook import ProcessedWebhookEvents
 logger = logging.getLogger("payment_layer.webhook")
 
 
-def timingSafeEqual(a: Union[str, bytes], b: Union[str, bytes]) -> bool:
+def timingSafeEqual(a: str | bytes, b: str | bytes) -> bool:
     """
     Constant-time string/bytes comparison using Python's hmac.compare_digest
     to eliminate timing side-channel attacks.
@@ -33,11 +35,11 @@ timing_safe_equal = timingSafeEqual
 
 class WebhookSecurityException(Exception):
     """Base exception for webhook security and authentication errors."""
-    pass
 
 
 class MissingWebhookSignatureException(WebhookSecurityException):
     """Raised when the mandatory HMAC signature header is missing."""
+
     def __init__(self, gateway: str, expected_header: str):
         self.gateway = gateway
         self.expected_header = expected_header
@@ -48,24 +50,22 @@ class MissingWebhookSignatureException(WebhookSecurityException):
 
 class InvalidWebhookSignatureException(WebhookSecurityException):
     """Raised when HMAC signature verification fails (timing safe check)."""
+
     def __init__(self, gateway: str, reason: str = "Signature mismatch"):
         self.gateway = gateway
         self.reason = reason
-        super().__init__(
-            f"Invalid HMAC signature for gateway '{gateway}': {reason}"
-        )
+        super().__init__(f"Invalid HMAC signature for gateway '{gateway}': {reason}")
 
 
 class WebhookProcessingException(Exception):
     """Raised when an internal error occurs during webhook processing."""
-    pass
 
 
 # =============================================================================
 # GATEWAY HMAC SIGNATURE HEADERS & CONFIGURATION
 # =============================================================================
 
-GATEWAY_SIGNATURE_HEADERS: Dict[str, List[str]] = {
+GATEWAY_SIGNATURE_HEADERS: dict[str, list[str]] = {
     "razorpay": ["x-razorpay-signature", "x-signature"],
     "stripe": ["stripe-signature"],
     "payu": ["x-payu-signature", "payu-signature"],
@@ -73,7 +73,7 @@ GATEWAY_SIGNATURE_HEADERS: Dict[str, List[str]] = {
 }
 
 
-def get_gateway_webhook_secret(gateway: str, override_secret: Optional[str] = None) -> str:
+def get_gateway_webhook_secret(gateway: str, override_secret: str | None = None) -> str:
     """Retrieves the HMAC secret configured for the specified payment gateway."""
     if override_secret:
         return override_secret
@@ -93,9 +93,9 @@ def get_gateway_webhook_secret(gateway: str, override_secret: Optional[str] = No
 def generate_webhook_signature(
     gateway: str,
     raw_body: bytes,
-    secret: Optional[str] = None,
-    timestamp: Optional[int] = None,
-) -> Tuple[str, str]:
+    secret: str | None = None,
+    timestamp: int | None = None,
+) -> tuple[str, str]:
     """
     Test and integration utility: Computes a compliant HMAC-SHA256 signature
     and returns (header_name, header_value) for any of the 4 gateways.
@@ -104,8 +104,8 @@ def generate_webhook_signature(
     sec = get_gateway_webhook_secret(gw, secret)
 
     if gw == "stripe":
-        ts = timestamp or int(datetime.now(timezone.utc).timestamp())
-        signed_payload = f"{ts}.{raw_body.decode('utf-8')}".encode("utf-8")
+        ts = timestamp or int(datetime.now(UTC).timestamp())
+        signed_payload = f"{ts}.{raw_body.decode('utf-8')}".encode()
         computed_sig = hmac.new(sec.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
         return ("Stripe-Signature", f"t={ts},v1={computed_sig}")
     elif gw == "razorpay":
@@ -126,11 +126,12 @@ def generate_webhook_signature(
 # HMAC-SHA256 SIGNATURE VERIFICATION
 # =============================================================================
 
+
 def verify_hmac_signature(
     gateway: str,
     raw_body: bytes,
     headers: Mapping[str, str],
-    secret: Optional[str] = None,
+    secret: str | None = None,
 ) -> bool:
     """
     Verifies incoming webhook payload signature using HMAC-SHA256.
@@ -147,7 +148,7 @@ def verify_hmac_signature(
 
     # 1. Locate relevant signature header
     candidate_headers = GATEWAY_SIGNATURE_HEADERS.get(gw, ["x-signature", "x-webhook-signature"])
-    sig_header_val: Optional[str] = None
+    sig_header_val: str | None = None
     matched_header_name = candidate_headers[0]
 
     for candidate in candidate_headers:
@@ -164,8 +165,8 @@ def verify_hmac_signature(
         # Stripe signature format: t={timestamp},v1={hash},v1={hash2}...
         # Also support plain hex if passed without t=
         if "t=" in sig_header_val and "v1=" in sig_header_val:
-            timestamp: Optional[str] = None
-            candidate_sigs: List[str] = []
+            timestamp: str | None = None
+            candidate_sigs: list[str] = []
             for part in sig_header_val.split(","):
                 part = part.strip()
                 if part.startswith("t="):
@@ -176,7 +177,7 @@ def verify_hmac_signature(
             if not timestamp or not candidate_sigs:
                 raise InvalidWebhookSignatureException(gw, "Malformed Stripe-Signature header")
 
-            signed_payload = f"{timestamp}.{raw_body.decode('utf-8')}".encode("utf-8")
+            signed_payload = f"{timestamp}.{raw_body.decode('utf-8')}".encode()
             expected_sig = hmac.new(sec.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
 
             # Compare all v1 candidates in constant time
@@ -209,12 +210,13 @@ def verify_hmac_signature(
 # EVENT METADATA EXTRACTION
 # =============================================================================
 
+
 def extract_event_metadata(
     gateway: str,
     raw_body: bytes,
     headers: Mapping[str, str],
-    parsed_payload: Dict[str, Any],
-) -> Tuple[str, str]:
+    parsed_payload: dict[str, Any],
+) -> tuple[str, str]:
     """
     Extracts (event_id, event_type) from incoming webhook request.
     Handles nested gateway patterns and standardized envelope payloads.
@@ -230,7 +232,7 @@ def extract_event_metadata(
     )
 
     # 1. Extract event_id
-    event_id: Optional[str] = None
+    event_id: str | None = None
     if parsed_payload.get("event_id"):
         event_id = str(parsed_payload["event_id"])
     elif header_event_id:
@@ -248,19 +250,25 @@ def extract_event_metadata(
                     event_id = str(entity["id"])
                     break
     elif gw == "payu":
-        event_id = str(
-            parsed_payload.get("mihpayid")
-            or parsed_payload.get("txnid")
-            or parsed_payload.get("id")
-            or ""
-        ) or None
+        event_id = (
+            str(
+                parsed_payload.get("mihpayid")
+                or parsed_payload.get("txnid")
+                or parsed_payload.get("id")
+                or ""
+            )
+            or None
+        )
     elif gw == "upi":
-        event_id = str(
-            parsed_payload.get("txn_id")
-            or parsed_payload.get("npci_txn_id")
-            or parsed_payload.get("id")
-            or ""
-        ) or None
+        event_id = (
+            str(
+                parsed_payload.get("txn_id")
+                or parsed_payload.get("npci_txn_id")
+                or parsed_payload.get("id")
+                or ""
+            )
+            or None
+        )
 
     if not event_id and parsed_payload.get("id"):
         event_id = str(parsed_payload["id"])
@@ -285,7 +293,7 @@ def extract_event_metadata(
 # WEBHOOK INGESTION PIPELINE & DLQ SERVICE
 # =============================================================================
 
-WebhookHandlerType = Callable[[str, str, Dict[str, Any], AsyncSession], Awaitable[None]]
+WebhookHandlerType = Callable[[str, str, dict[str, Any], AsyncSession], Awaitable[None]]
 
 
 class WebhookIngestionService:
@@ -299,7 +307,7 @@ class WebhookIngestionService:
     MAX_RETRIES: int = 3
 
     def __init__(self):
-        self._handlers: Dict[str, WebhookHandlerType] = {}
+        self._handlers: dict[str, WebhookHandlerType] = {}
 
     def register_handler(self, event_type: str, handler: WebhookHandlerType) -> None:
         """Registers custom domain handler for a specific event type."""
@@ -311,9 +319,9 @@ class WebhookIngestionService:
         raw_body: bytes,
         headers: Mapping[str, str],
         db: AsyncSession,
-        custom_handler: Optional[WebhookHandlerType] = None,
-        secret_override: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        custom_handler: WebhookHandlerType | None = None,
+        secret_override: str | None = None,
+    ) -> dict[str, Any]:
         """
         Executes the end-to-end ingestion pipeline:
         Step 1: HMAC-SHA256 verification using timingSafeEqual.
@@ -324,7 +332,7 @@ class WebhookIngestionService:
         Step 5: DLQ routing if 3 failures occur.
         """
         gateway_clean = gateway.lower().strip()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # ---------------------------------------------------------------------
         # Step 1: Verify HMAC Signature (timingSafeEqual)
@@ -341,7 +349,7 @@ class WebhookIngestionService:
         # ---------------------------------------------------------------------
         try:
             parsed_payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-        except Exception as exc:
+        except Exception:
             parsed_payload = {"raw_content": raw_body.decode("utf-8", errors="replace")}
 
         # Unwrap if body is wrapped in {"event_id":..., "event_type":..., "payload":{...}}
@@ -382,7 +390,11 @@ class WebhookIngestionService:
                     "event_id": event_id,
                     "event_type": existing_event.event_type,
                     "message": "Duplicate webhook event already processed.",
-                    "processed_at": existing_event.processed_at.isoformat() if existing_event.processed_at else None,
+                    "processed_at": (
+                        existing_event.processed_at.isoformat()
+                        if existing_event.processed_at
+                        else None
+                    ),
                     "retry_count": existing_event.retry_count,
                 }
 
@@ -435,12 +447,14 @@ class WebhookIngestionService:
         # ---------------------------------------------------------------------
         # Step 5: Execute Processing with DLQ Fallback on Failure
         # ---------------------------------------------------------------------
-        handler_to_run = custom_handler or self._handlers.get(event_type) or self._default_transaction_processor
+        handler_to_run = (
+            custom_handler or self._handlers.get(event_type) or self._default_transaction_processor
+        )
 
         try:
             await handler_to_run(gateway_clean, event_type, unwrapped_payload, db)
             new_event.status = WebhookProcessingStatus.PROCESSED.value
-            new_event.processed_at = datetime.now(timezone.utc)
+            new_event.processed_at = datetime.now(UTC)
             new_event.processing_error = None
             await db.commit()
 
@@ -466,7 +480,7 @@ class WebhookIngestionService:
 
             if new_event.retry_count >= self.MAX_RETRIES:
                 new_event.status = WebhookProcessingStatus.DLQ.value
-                new_event.processed_at = datetime.now(timezone.utc)
+                new_event.processed_at = datetime.now(UTC)
                 await db.commit()
                 logger.critical(
                     "[DLQ_ALERT] Webhook (%s, %s) moved to DLQ after %d failed attempts",
@@ -487,7 +501,7 @@ class WebhookIngestionService:
             new_event.status = WebhookProcessingStatus.FAILED.value
             await db.commit()
             raise WebhookProcessingException(
-                f"Webhook processing failed (attempt {new_event.retry_count}/{self.MAX_RETRIES}): {str(exc)}"
+                f"Webhook processing failed (attempt {new_event.retry_count}/{self.MAX_RETRIES}): {exc!s}"
             )
 
     async def _process_retry_attempt(
@@ -495,24 +509,22 @@ class WebhookIngestionService:
         event: ProcessedWebhookEvents,
         gateway: str,
         event_type: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         db: AsyncSession,
-        custom_handler: Optional[WebhookHandlerType] = None,
-    ) -> Dict[str, Any]:
+        custom_handler: WebhookHandlerType | None = None,
+    ) -> dict[str, Any]:
         """
         Processes a retried webhook event, managing the retry count
         and transitioning to DLQ if failures reach 3.
         """
         event.retry_count += 1
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Check if retry limit exceeded before attempt
         if event.retry_count >= self.MAX_RETRIES:
             event.status = WebhookProcessingStatus.DLQ.value
             event.processed_at = now
-            event.processing_error = (
-                f"Exceeded maximum retries ({self.MAX_RETRIES}). Last error: {event.processing_error}"
-            )
+            event.processing_error = f"Exceeded maximum retries ({self.MAX_RETRIES}). Last error: {event.processing_error}"
             await db.commit()
             logger.critical(
                 "[DLQ_ALERT] Webhook (%s, %s) permanently moved to DLQ after %d failed attempts",
@@ -531,7 +543,9 @@ class WebhookIngestionService:
             }
 
         # Attempt retry execution
-        handler_to_run = custom_handler or self._handlers.get(event_type) or self._default_transaction_processor
+        handler_to_run = (
+            custom_handler or self._handlers.get(event_type) or self._default_transaction_processor
+        )
         try:
             await handler_to_run(gateway, event_type, payload, db)
             event.status = WebhookProcessingStatus.PROCESSED.value
@@ -581,14 +595,14 @@ class WebhookIngestionService:
             event.status = WebhookProcessingStatus.FAILED.value
             await db.commit()
             raise WebhookProcessingException(
-                f"Webhook retry failed (attempt {event.retry_count}/{self.MAX_RETRIES}): {str(exc)}"
+                f"Webhook retry failed (attempt {event.retry_count}/{self.MAX_RETRIES}): {exc!s}"
             )
 
     async def _default_transaction_processor(
         self,
         gateway: str,
         event_type: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         db: AsyncSession,
     ) -> None:
         """
@@ -641,10 +655,10 @@ class WebhookIngestionService:
     async def get_dlq_events(
         self,
         db: AsyncSession,
-        gateway: Optional[str] = None,
+        gateway: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> List[ProcessedWebhookEvents]:
+    ) -> list[ProcessedWebhookEvents]:
         """Queries events currently placed in the Dead Letter Queue."""
         stmt = select(ProcessedWebhookEvents).where(
             ProcessedWebhookEvents.status == WebhookProcessingStatus.DLQ.value
@@ -660,7 +674,7 @@ class WebhookIngestionService:
         gateway: str,
         event_id: str,
         db: AsyncSession,
-        custom_handler: Optional[WebhookHandlerType] = None,
+        custom_handler: WebhookHandlerType | None = None,
     ) -> ProcessedWebhookEvents:
         """
         Manually or programmatically replays a webhook event stored in the DLQ.
@@ -677,25 +691,32 @@ class WebhookIngestionService:
         if not event:
             raise ValueError(f"Webhook event ({gateway_clean}, {event_id}) not found.")
 
-        handler = custom_handler or self._handlers.get(event.event_type) or self._default_transaction_processor
+        handler = (
+            custom_handler
+            or self._handlers.get(event.event_type)
+            or self._default_transaction_processor
+        )
         payload = event.raw_payload
-        if isinstance(payload, dict) and "payload" in payload and isinstance(payload["payload"], dict):
+        if (
+            isinstance(payload, dict)
+            and "payload" in payload
+            and isinstance(payload["payload"], dict)
+        ):
             payload = payload["payload"]
 
         try:
             await handler(gateway_clean, event.event_type, payload, db)
             event.status = WebhookProcessingStatus.PROCESSED.value
-            event.processed_at = datetime.now(timezone.utc)
+            event.processed_at = datetime.now(UTC)
             event.processing_error = None
             await db.commit()
             return event
         except Exception as exc:
             event.retry_count += 1
-            event.processing_error = f"DLQ Replay Failed: {str(exc)}"
+            event.processing_error = f"DLQ Replay Failed: {exc!s}"
             await db.commit()
-            raise WebhookProcessingException(f"DLQ replay failed: {str(exc)}")
+            raise WebhookProcessingException(f"DLQ replay failed: {exc!s}")
 
 
 # Global singleton instance
 webhook_ingestion_service = WebhookIngestionService()
-

@@ -3,11 +3,11 @@ import hmac
 import json
 import time
 import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from app.core.config import settings
 from app.core.database import get_async_db
 from app.core.enums import WebhookProcessingStatus
 from app.main import app
@@ -18,16 +18,15 @@ from app.services.webhook import (
     WebhookIngestionService,
     WebhookProcessingException,
     generate_webhook_signature,
-    timingSafeEqual,
     timing_safe_equal,
+    timingSafeEqual,
     verify_hmac_signature,
-    webhook_ingestion_service,
 )
-
 
 # =============================================================================
 # 1. TIMING-SAFE EQUALITY & SECURITY TESTS
 # =============================================================================
+
 
 def test_timing_safe_equal_constant_time_comparison():
     """
@@ -60,11 +59,15 @@ def test_timing_safe_equal_constant_time_comparison():
 # 2. HMAC-SHA256 SIGNATURE VERIFICATION FOR 4 GATEWAYS
 # =============================================================================
 
-@pytest.mark.parametrize("gateway,header_name", [
-    ("razorpay", "X-Razorpay-Signature"),
-    ("payu", "X-PayU-Signature"),
-    ("upi", "X-UPI-Signature"),
-])
+
+@pytest.mark.parametrize(
+    "gateway,header_name",
+    [
+        ("razorpay", "X-Razorpay-Signature"),
+        ("payu", "X-PayU-Signature"),
+        ("upi", "X-UPI-Signature"),
+    ],
+)
 def test_hmac_sha256_verification_standard_gateways(gateway: str, header_name: str):
     """
     Verifies HMAC-SHA256 signature verification for Razorpay, PayU, and UPI.
@@ -107,12 +110,14 @@ def test_hmac_sha256_stripe_signature_verification():
     Signed data: {timestamp}.{raw_body}
     """
     gateway = "stripe"
-    raw_body = json.dumps({"id": "evt_stripe_999", "type": "payment_intent.succeeded"}).encode("utf-8")
+    raw_body = json.dumps({"id": "evt_stripe_999", "type": "payment_intent.succeeded"}).encode(
+        "utf-8"
+    )
     secret = "whsec_stripe_test_secret_32_bytes_ok"
     timestamp = int(time.time())
 
     # Compute valid Stripe signature
-    signed_payload = f"{timestamp}.{raw_body.decode('utf-8')}".encode("utf-8")
+    signed_payload = f"{timestamp}.{raw_body.decode('utf-8')}".encode()
     computed_sig = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
     valid_header_val = f"t={timestamp},v1={computed_sig}"
 
@@ -123,12 +128,19 @@ def test_hmac_sha256_stripe_signature_verification():
 
     # 2. Multiple signatures in header (e.g. rolling secrets v1=old,v1=new)
     multi_sig_header = f"t={timestamp},v1=fake_old_hash,v1={computed_sig}"
-    assert verify_hmac_signature(gateway, raw_body, {"Stripe-Signature": multi_sig_header}, secret=secret) is True
+    assert (
+        verify_hmac_signature(
+            gateway, raw_body, {"Stripe-Signature": multi_sig_header}, secret=secret
+        )
+        is True
+    )
 
     # 3. Tampered timestamp fails
     tampered_ts_header = f"t={timestamp + 100},v1={computed_sig}"
     with pytest.raises(InvalidWebhookSignatureException):
-        verify_hmac_signature(gateway, raw_body, {"Stripe-Signature": tampered_ts_header}, secret=secret)
+        verify_hmac_signature(
+            gateway, raw_body, {"Stripe-Signature": tampered_ts_header}, secret=secret
+        )
 
     # 4. Missing signature header
     with pytest.raises(MissingWebhookSignatureException):
@@ -150,8 +162,11 @@ def test_generate_webhook_signature_helper():
 # 3. DEDUPLICATION TESTS (COMPOSITE PRIMARY KEY: gateway, event_id)
 # =============================================================================
 
+
 @pytest.mark.anyio
-async def test_deduplication_returns_http_200_immediately_for_duplicate_event(test_session_maker):
+async def test_deduplication_returns_http_200_immediately_for_duplicate_event(
+    test_session_maker,
+):
     """
     STRICT MANDATE:
     Implement deduplication: Extract the event_id, check the processed_webhook_events
@@ -210,7 +225,9 @@ async def test_deduplication_returns_http_200_immediately_for_duplicate_event(te
 
 
 @pytest.mark.anyio
-async def test_composite_primary_key_allows_same_event_id_across_different_gateways(test_session_maker):
+async def test_composite_primary_key_allows_same_event_id_across_different_gateways(
+    test_session_maker,
+):
     """
     Ensures composite primary key (gateway, event_id) isolates event spaces:
     'stripe' with event 'evt_100' and 'razorpay' with event 'evt_100' are distinct records.
@@ -247,8 +264,11 @@ async def test_composite_primary_key_allows_same_event_id_across_different_gatew
 # 4. DEAD LETTER QUEUE (DLQ) PATTERN TESTS
 # =============================================================================
 
+
 @pytest.mark.anyio
-async def test_dlq_pattern_transitions_status_to_dlq_after_three_failures(test_session_maker):
+async def test_dlq_pattern_transitions_status_to_dlq_after_three_failures(
+    test_session_maker,
+):
     """
     STRICT MANDATE:
     Add a Dead Letter Queue (DLQ) pattern: If a webhook fails processing 3 times,
@@ -408,9 +428,11 @@ async def test_dlq_inspection_and_successful_replay(test_session_maker):
 # 5. FASTAPI HTTP API END-TO-END TESTS
 # =============================================================================
 
+
 @pytest.mark.anyio
 async def test_fastapi_webhook_ingest_endpoint_valid_and_duplicate(test_session_maker):
     """Tests the /api/v1/webhooks/{gateway} FastAPI endpoint over ASGI."""
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -423,7 +445,11 @@ async def test_fastapi_webhook_ingest_endpoint_valid_and_duplicate(test_session_
         ) as client:
             event_id = f"evt_api_{uuid.uuid4()}"
             gateway = "razorpay"
-            payload = {"event_id": event_id, "event_type": "payment.captured", "amount": 40000}
+            payload = {
+                "event_id": event_id,
+                "event_type": "payment.captured",
+                "amount": 40000,
+            }
             raw_body = json.dumps(payload).encode("utf-8")
             h_name, h_val = generate_webhook_signature(gateway, raw_body)
 
@@ -455,6 +481,7 @@ async def test_fastapi_webhook_ingest_endpoint_valid_and_duplicate(test_session_
 @pytest.mark.anyio
 async def test_fastapi_webhook_ingest_endpoint_signature_failures(test_session_maker):
     """Tests 401 Unauthorized responses for invalid or missing signatures on FastAPI endpoint."""
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -489,4 +516,3 @@ async def test_fastapi_webhook_ingest_endpoint_signature_failures(test_session_m
             assert "Invalid webhook signature" in resp_invalid.json()["detail"]
     finally:
         app.dependency_overrides.clear()
-

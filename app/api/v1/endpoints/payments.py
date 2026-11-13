@@ -1,14 +1,13 @@
 import logging
 import uuid
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+
+from fastapi import APIRouter, Depends, Header, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.database import get_async_db
 from app.core.enums import StateTrigger, TransactionState
-from app.core.errors import PaymentAPIException, format_uniform_error_dict
+from app.core.errors import PaymentAPIException
 from app.gateways.base import (
     GatewayAuthRequest,
     GatewayCaptureRequest,
@@ -20,7 +19,7 @@ from app.gateways.exceptions import (
     GatewayException,
     GatewayTimeoutException,
 )
-from app.gateways.router import GatewayRouter, gateway_router
+from app.gateways.router import gateway_router
 from app.models.transaction import Transactions, TransactionStateLog
 from app.schemas.payment import (
     PaymentCaptureRequest,
@@ -34,12 +33,9 @@ from app.services.idempotency import (
     get_idempotency_service,
 )
 from app.services.reconciliation import (
-    ReconciliationEngine,
     reconciliation_engine,
 )
 from app.services.state_machine import (
-    InvalidStateTransitionException,
-    TransactionNotFoundException,
     TransactionStateMachine,
 )
 from app.services.webhook import webhook_ingestion_service
@@ -53,11 +49,12 @@ router = APIRouter()
 # 1. POST /api/v1/payments (Initiate & Process Payment)
 # =============================================================================
 
+
 @router.post("", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
 async def create_payment(
     payload: PaymentCreateRequest,
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_mock_response: Optional[str] = Header(None, alias="X-Mock-Response"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    x_mock_response: str | None = Header(None, alias="X-Mock-Response"),
     db: AsyncSession = Depends(get_async_db),
     idemp_service: IdempotencyService = Depends(get_idempotency_service),
 ):
@@ -279,12 +276,13 @@ async def create_payment(
 # 2. POST /api/v1/payments/{id}/capture (Capture Authorized Payment)
 # =============================================================================
 
+
 @router.post("/{id}/capture", response_model=PaymentResponse, status_code=status.HTTP_200_OK)
 async def capture_payment(
     id: uuid.UUID,
-    payload: Optional[PaymentCaptureRequest] = None,
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_mock_response: Optional[str] = Header(None, alias="X-Mock-Response"),
+    payload: PaymentCaptureRequest | None = None,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    x_mock_response: str | None = Header(None, alias="X-Mock-Response"),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
@@ -304,7 +302,10 @@ async def capture_payment(
         )
 
     # Validate state transition feasibility
-    if txn.status not in (TransactionState.AUTHORISED.value, TransactionState.PARTIALLY_CAPTURED.value):
+    if txn.status not in (
+        TransactionState.AUTHORISED.value,
+        TransactionState.PARTIALLY_CAPTURED.value,
+    ):
         raise PaymentAPIException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             code="INVALID_STATE_TRANSITION",
@@ -355,7 +356,9 @@ async def capture_payment(
     try:
         cap_resp = await gw.capture(capture_req)
         is_partial = capture_amount < txn.amount
-        target_state = TransactionState.PARTIALLY_CAPTURED if is_partial else TransactionState.CAPTURED
+        target_state = (
+            TransactionState.PARTIALLY_CAPTURED if is_partial else TransactionState.CAPTURED
+        )
 
         await sm.transition(
             transaction_id=txn.id,
@@ -411,12 +414,13 @@ async def capture_payment(
 # 3. POST /api/v1/payments/{id}/refund (Refund Settled Funds)
 # =============================================================================
 
+
 @router.post("/{id}/refund", response_model=PaymentResponse, status_code=status.HTTP_200_OK)
 async def refund_payment(
     id: uuid.UUID,
-    payload: Optional[PaymentRefundRequest] = None,
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
-    x_mock_response: Optional[str] = Header(None, alias="X-Mock-Response"),
+    payload: PaymentRefundRequest | None = None,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    x_mock_response: str | None = Header(None, alias="X-Mock-Response"),
     db: AsyncSession = Depends(get_async_db),
 ):
     """
@@ -522,7 +526,12 @@ async def refund_payment(
 # 4. WEBHOOKS & RECONCILIATION ROUTES
 # =============================================================================
 
-@router.post("/webhooks/{gateway}", response_model=WebhookIngestResultResponse, status_code=status.HTTP_200_OK)
+
+@router.post(
+    "/webhooks/{gateway}",
+    response_model=WebhookIngestResultResponse,
+    status_code=status.HTTP_200_OK,
+)
 async def process_payment_webhook(
     gateway: str,
     request: Request,

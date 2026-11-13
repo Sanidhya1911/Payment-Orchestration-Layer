@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.database import async_engine
@@ -69,4 +71,3 @@ async def root():
         "docs": "/docs",
         "health": "/health",
     }
-

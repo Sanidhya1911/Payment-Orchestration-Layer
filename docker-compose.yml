@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: zetheta_postgres_16
+    restart: always
+    environment:
+      POSTGRES_DB: payment_layer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payment_layer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - payment_network
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: zetheta_payment_api
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: payment_layer
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/payment_layer
+      SYNC_DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/payment_layer
+    networks:
+      - payment_network
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  payment_network:
+    driver: bridge
+

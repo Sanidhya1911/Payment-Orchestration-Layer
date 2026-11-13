@@ -116,7 +116,11 @@ class StripeGateway(PaymentGateway):
         raw_payload = {
             "id": gw_id,
             "object": "payment_intent",
-            "status": "succeeded" if resolved_status in ("AUTHORIZED", "CAPTURED") else "requires_payment_method",
+            "status": (
+                "succeeded"
+                if resolved_status in ("AUTHORIZED", "CAPTURED")
+                else "requires_payment_method"
+            ),
             "reconciliation_status": resolved_status,
         }
 
@@ -127,4 +131,3 @@ class StripeGateway(PaymentGateway):
             raw_payload=raw_payload,
             latency_ms=latency_ms,
         )
-

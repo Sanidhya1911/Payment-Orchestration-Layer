@@ -1,20 +1,14 @@
 import logging
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import (
     Any,
-    AsyncIterator,
-    Awaitable,
-    Callable,
-    Dict,
     Generic,
-    Optional,
-    Set,
-    Tuple,
     TypeVar,
-    Union,
 )
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -32,16 +26,19 @@ class InvalidStateTransitionException(Exception):
     Raised when an illegal transaction state transition is attempted.
     Adheres to strict deterministic finite-state machine enforcement.
     """
+
     def __init__(
         self,
-        current_state: Union[str, TransactionState],
-        target_state: Union[str, TransactionState],
-        transaction_id: Optional[Union[str, uuid.UUID]] = None,
-        trigger: Optional[str] = None,
-        allowed_transitions: Optional[Set[Union[str, TransactionState]]] = None,
+        current_state: str | TransactionState,
+        target_state: str | TransactionState,
+        transaction_id: str | uuid.UUID | None = None,
+        trigger: str | None = None,
+        allowed_transitions: set[str | TransactionState] | None = None,
     ):
         self.current_state = (
-            current_state.value if isinstance(current_state, TransactionState) else str(current_state)
+            current_state.value
+            if isinstance(current_state, TransactionState)
+            else str(current_state)
         )
         self.target_state = (
             target_state.value if isinstance(target_state, TransactionState) else str(target_state)
@@ -65,7 +62,8 @@ class InvalidStateTransitionException(Exception):
 
 class TransactionNotFoundException(Exception):
     """Raised when a transaction record cannot be found in the ledger."""
-    def __init__(self, transaction_id: Union[str, uuid.UUID]):
+
+    def __init__(self, transaction_id: str | uuid.UUID):
         self.transaction_id = str(transaction_id)
         super().__init__(f"Transaction '{self.transaction_id}' was not found in the database.")
 
@@ -75,7 +73,8 @@ class ConcurrentStateMutationException(Exception):
     Raised if transaction state changed unexpectedly while lock was released during
     external gateway execution (e.g. concurrent webhook callback or sweeper).
     """
-    def __init__(self, transaction_id: Union[str, uuid.UUID], expected_state: str, actual_state: str):
+
+    def __init__(self, transaction_id: str | uuid.UUID, expected_state: str, actual_state: str):
         self.transaction_id = str(transaction_id)
         self.expected_state = expected_state
         self.actual_state = actual_state
@@ -88,7 +87,7 @@ class ConcurrentStateMutationException(Exception):
 # =============================================================================
 # DETERMINISTIC STATE MACHINE TRANSITION GRAPH (12 STRICT STATES)
 # =============================================================================
-ALLOWED_TRANSITIONS: Dict[TransactionState, Set[TransactionState]] = {
+ALLOWED_TRANSITIONS: dict[TransactionState, set[TransactionState]] = {
     # 1. CREATED
     TransactionState.CREATED: {
         TransactionState.ROUTE_SELECTED,
@@ -109,12 +108,12 @@ ALLOWED_TRANSITIONS: Dict[TransactionState, Set[TransactionState]] = {
     TransactionState.AUTHORISED: {
         TransactionState.CAPTURE_INITIATED,
         TransactionState.REFUND_INITIATED,  # Auth reversal / void
-        TransactionState.FAILED,            # Auth expiration / cancellation
+        TransactionState.FAILED,  # Auth expiration / cancellation
     },
     # 5. AUTH_FAILED
     TransactionState.AUTH_FAILED: {
-        TransactionState.ROUTE_SELECTED,    # Smart retry / failover route
-        TransactionState.FAILED,            # Terminal failure
+        TransactionState.ROUTE_SELECTED,  # Smart retry / failover route
+        TransactionState.FAILED,  # Terminal failure
     },
     # 6. CAPTURE_INITIATED
     TransactionState.CAPTURE_INITIATED: {
@@ -129,20 +128,20 @@ ALLOWED_TRANSITIONS: Dict[TransactionState, Set[TransactionState]] = {
     },
     # 8. PARTIALLY_CAPTURED
     TransactionState.PARTIALLY_CAPTURED: {
-        TransactionState.CAPTURE_INITIATED, # Incremental capture for remaining balance
+        TransactionState.CAPTURE_INITIATED,  # Incremental capture for remaining balance
         TransactionState.REFUND_INITIATED,  # Refund against captured amount
     },
     # 9. CAPTURE_FAILED
     TransactionState.CAPTURE_FAILED: {
-        TransactionState.CAPTURE_INITIATED, # Retry capture before auth expires
-        TransactionState.FAILED,            # Terminal capture failure
+        TransactionState.CAPTURE_INITIATED,  # Retry capture before auth expires
+        TransactionState.FAILED,  # Terminal capture failure
     },
     # 10. REFUND_INITIATED
     TransactionState.REFUND_INITIATED: {
         TransactionState.REFUNDED,
-        TransactionState.CAPTURED,          # Refund rejected: revert to captured
-        TransactionState.PARTIALLY_CAPTURED,# Refund rejected: revert to partially captured
-        TransactionState.FAILED,            # Unrecoverable refund failure
+        TransactionState.CAPTURED,  # Refund rejected: revert to captured
+        TransactionState.PARTIALLY_CAPTURED,  # Refund rejected: revert to partially captured
+        TransactionState.FAILED,  # Unrecoverable refund failure
     },
     # 11. REFUNDED (Terminal)
     TransactionState.REFUNDED: set(),
@@ -154,23 +153,24 @@ ALLOWED_TRANSITIONS: Dict[TransactionState, Set[TransactionState]] = {
 @dataclass
 class GatewayScopeResult:
     """Carries completion payload for a gateway transition scope."""
-    target_state: Optional[TransactionState] = None
-    trigger: Optional[str] = None
-    gateway_payload: Optional[Dict[str, Any]] = None
-    gateway_transaction_id: Optional[str] = None
-    gateway_reference_id: Optional[str] = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    transition_metadata: Optional[Dict[str, Any]] = None
+
+    target_state: TransactionState | None = None
+    trigger: str | None = None
+    gateway_payload: dict[str, Any] | None = None
+    gateway_transaction_id: str | None = None
+    gateway_reference_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    transition_metadata: dict[str, Any] | None = None
 
     def set_success(
         self,
         target_state: TransactionState,
-        trigger: Optional[str] = None,
-        gateway_payload: Optional[Dict[str, Any]] = None,
-        gateway_transaction_id: Optional[str] = None,
-        gateway_reference_id: Optional[str] = None,
-        transition_metadata: Optional[Dict[str, Any]] = None,
+        trigger: str | None = None,
+        gateway_payload: dict[str, Any] | None = None,
+        gateway_transaction_id: str | None = None,
+        gateway_reference_id: str | None = None,
+        transition_metadata: dict[str, Any] | None = None,
     ) -> None:
         self.target_state = target_state
         self.trigger = trigger
@@ -182,11 +182,11 @@ class GatewayScopeResult:
     def set_failure(
         self,
         target_state: TransactionState,
-        trigger: Optional[str] = None,
-        error_code: Optional[str] = None,
-        error_message: Optional[str] = None,
-        gateway_payload: Optional[Dict[str, Any]] = None,
-        transition_metadata: Optional[Dict[str, Any]] = None,
+        trigger: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        gateway_payload: dict[str, Any] | None = None,
+        transition_metadata: dict[str, Any] | None = None,
     ) -> None:
         self.target_state = target_state
         self.trigger = trigger
@@ -199,10 +199,11 @@ class GatewayScopeResult:
 @dataclass
 class GatewayExecutionResult(Generic[T]):
     """Result of an orchestrated gateway execution."""
+
     success: bool
     transaction: Transactions
-    gateway_response: Optional[T] = None
-    error: Optional[Exception] = None
+    gateway_response: T | None = None
+    error: Exception | None = None
 
 
 class TransactionStateMachine:
@@ -218,7 +219,7 @@ class TransactionStateMachine:
         self._session_maker = session_maker
 
     @classmethod
-    def get_allowed_transitions(cls, state: Union[str, TransactionState]) -> Set[TransactionState]:
+    def get_allowed_transitions(cls, state: str | TransactionState) -> set[TransactionState]:
         """Returns the set of permissible target states from a given state."""
         state_enum = state if isinstance(state, TransactionState) else TransactionState(state)
         return ALLOWED_TRANSITIONS.get(state_enum, set())
@@ -226,17 +227,25 @@ class TransactionStateMachine:
     @classmethod
     def validate_transition(
         cls,
-        current_state: Union[str, TransactionState],
-        target_state: Union[str, TransactionState],
-        transaction_id: Optional[Union[str, uuid.UUID]] = None,
-        trigger: Optional[str] = None,
+        current_state: str | TransactionState,
+        target_state: str | TransactionState,
+        transaction_id: str | uuid.UUID | None = None,
+        trigger: str | None = None,
     ) -> None:
         """
         Validates whether current_state -> target_state is legal.
         Raises InvalidStateTransitionException if the transition is prohibited.
         """
-        curr = current_state if isinstance(current_state, TransactionState) else TransactionState(current_state)
-        tgt = target_state if isinstance(target_state, TransactionState) else TransactionState(target_state)
+        curr = (
+            current_state
+            if isinstance(current_state, TransactionState)
+            else TransactionState(current_state)
+        )
+        tgt = (
+            target_state
+            if isinstance(target_state, TransactionState)
+            else TransactionState(target_state)
+        )
 
         allowed = ALLOWED_TRANSITIONS.get(curr, set())
         if tgt not in allowed:
@@ -251,17 +260,17 @@ class TransactionStateMachine:
     async def transition(
         self,
         transaction_id: uuid.UUID,
-        target_state: Union[str, TransactionState],
-        trigger: Union[str, StateTrigger],
+        target_state: str | TransactionState,
+        trigger: str | StateTrigger,
         actor_id: str,
-        gateway_payload: Optional[Dict[str, Any]] = None,
-        transition_metadata: Optional[Dict[str, Any]] = None,
-        gateway_id: Optional[str] = None,
-        gateway_transaction_id: Optional[str] = None,
-        gateway_reference_id: Optional[str] = None,
-        error_code: Optional[str] = None,
-        error_message: Optional[str] = None,
-        session: Optional[AsyncSession] = None,
+        gateway_payload: dict[str, Any] | None = None,
+        transition_metadata: dict[str, Any] | None = None,
+        gateway_id: str | None = None,
+        gateway_transaction_id: str | None = None,
+        gateway_reference_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        session: AsyncSession | None = None,
     ) -> Transactions:
         """
         Performs an atomic state transition under pessimistic lock (SELECT FOR UPDATE).
@@ -269,7 +278,9 @@ class TransactionStateMachine:
         and commits immediately to release the lock.
         """
         target_enum = (
-            target_state if isinstance(target_state, TransactionState) else TransactionState(target_state)
+            target_state
+            if isinstance(target_state, TransactionState)
+            else TransactionState(target_state)
         )
         trigger_str = trigger.value if isinstance(trigger, StateTrigger) else str(trigger)
 
@@ -317,24 +328,20 @@ class TransactionStateMachine:
         target_state: TransactionState,
         trigger: str,
         actor_id: str,
-        gateway_payload: Optional[Dict[str, Any]] = None,
-        transition_metadata: Optional[Dict[str, Any]] = None,
-        gateway_id: Optional[str] = None,
-        gateway_transaction_id: Optional[str] = None,
-        gateway_reference_id: Optional[str] = None,
-        error_code: Optional[str] = None,
-        error_message: Optional[str] = None,
+        gateway_payload: dict[str, Any] | None = None,
+        transition_metadata: dict[str, Any] | None = None,
+        gateway_id: str | None = None,
+        gateway_transaction_id: str | None = None,
+        gateway_reference_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
     ) -> Transactions:
         """
         Internal implementation of the locked transition step.
         Uses SELECT FOR UPDATE on the transactions table.
         """
         # 1. Pessimistic Row Lock: SELECT ... FOR UPDATE
-        stmt = (
-            select(Transactions)
-            .where(Transactions.id == transaction_id)
-            .with_for_update()
-        )
+        stmt = select(Transactions).where(Transactions.id == transaction_id).with_for_update()
         result = await session.execute(stmt)
         txn = result.scalar_one_or_none()
 
@@ -391,10 +398,10 @@ class TransactionStateMachine:
         self,
         transaction_id: uuid.UUID,
         in_flight_state: TransactionState,
-        trigger: Union[str, StateTrigger],
+        trigger: str | StateTrigger,
         actor_id: str,
-        gateway_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        gateway_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[GatewayScopeResult]:
         """
         Context manager enforcing the payment architect isolation pattern:
@@ -414,23 +421,22 @@ class TransactionStateMachine:
         # ---------------------------------------------------------------------
         # PHASE 1: PRE-CALL IN-FLIGHT TRANSITION (LOCK ACQUIRED -> RELEASED)
         # ---------------------------------------------------------------------
-        async with self._session_maker() as sess:
-            async with sess.begin():
-                await self._execute_transition_step(
-                    session=sess,
-                    transaction_id=transaction_id,
-                    target_state=in_flight_state,
-                    trigger=trigger_str,
-                    actor_id=actor_id,
-                    gateway_id=gateway_id,
-                    transition_metadata=metadata,
-                )
+        async with self._session_maker() as sess, sess.begin():
+            await self._execute_transition_step(
+                session=sess,
+                transaction_id=transaction_id,
+                target_state=in_flight_state,
+                trigger=trigger_str,
+                actor_id=actor_id,
+                gateway_id=gateway_id,
+                transition_metadata=metadata,
+            )
         # Lock is completely RELEASED here upon session commit!
 
         # ---------------------------------------------------------------------
         # PHASE 2: CALLER EXECUTES GATEWAY API CALL (ZERO LOCKS HELD)
         # ---------------------------------------------------------------------
-        caught_exception: Optional[Exception] = None
+        caught_exception: Exception | None = None
         try:
             yield scope_result
         except Exception as exc:
@@ -444,60 +450,59 @@ class TransactionStateMachine:
         # ---------------------------------------------------------------------
         # PHASE 3: POST-CALL TERMINAL/NEXT TRANSITION (LOCK RE-ACQUIRED -> RELEASED)
         # ---------------------------------------------------------------------
-        async with self._session_maker() as sess:
-            async with sess.begin():
-                # Re-acquire row lock
-                stmt = select(Transactions).where(Transactions.id == transaction_id).with_for_update()
-                res = await sess.execute(stmt)
-                txn = res.scalar_one_or_none()
-                if txn is None:
-                    raise TransactionNotFoundException(transaction_id)
+        async with self._session_maker() as sess, sess.begin():
+            # Re-acquire row lock
+            stmt = select(Transactions).where(Transactions.id == transaction_id).with_for_update()
+            res = await sess.execute(stmt)
+            txn = res.scalar_one_or_none()
+            if txn is None:
+                raise TransactionNotFoundException(transaction_id)
 
-                # Verify state wasn't concurrently tampered with while lock was released
-                if txn.status != in_flight_state.value:
-                    logger.warning(
-                        "Transaction %s state changed from %s to %s during external call",
-                        transaction_id,
-                        in_flight_state.value,
-                        txn.status,
-                    )
-                    raise ConcurrentStateMutationException(
-                        transaction_id=transaction_id,
-                        expected_state=in_flight_state.value,
-                        actual_state=txn.status,
-                    )
-
-                # Determine post-call outcome
-                if caught_exception is not None:
-                    final_target = scope_result.target_state or TransactionState.FAILED
-                    final_trigger = scope_result.trigger or StateTrigger.GATEWAY_TIMEOUT.value
-                    err_code = scope_result.error_code or "GATEWAY_ERROR"
-                    err_msg = scope_result.error_message or str(caught_exception)
-                else:
-                    if scope_result.target_state is None:
-                        raise ValueError(
-                            "Gateway transition scope exited without specifying target_state via "
-                            "scope.set_success(...) or scope.set_failure(...)."
-                        )
-                    final_target = scope_result.target_state
-                    final_trigger = scope_result.trigger or StateTrigger.GATEWAY_RESPONSE.value
-                    err_code = scope_result.error_code
-                    err_msg = scope_result.error_message
-
-                await self._execute_transition_step(
-                    session=sess,
-                    transaction_id=transaction_id,
-                    target_state=final_target,
-                    trigger=final_trigger,
-                    actor_id=actor_id,
-                    gateway_payload=scope_result.gateway_payload,
-                    transition_metadata=scope_result.transition_metadata,
-                    gateway_id=gateway_id,
-                    gateway_transaction_id=scope_result.gateway_transaction_id,
-                    gateway_reference_id=scope_result.gateway_reference_id,
-                    error_code=err_code,
-                    error_message=err_msg,
+            # Verify state wasn't concurrently tampered with while lock was released
+            if txn.status != in_flight_state.value:
+                logger.warning(
+                    "Transaction %s state changed from %s to %s during external call",
+                    transaction_id,
+                    in_flight_state.value,
+                    txn.status,
                 )
+                raise ConcurrentStateMutationException(
+                    transaction_id=transaction_id,
+                    expected_state=in_flight_state.value,
+                    actual_state=txn.status,
+                )
+
+            # Determine post-call outcome
+            if caught_exception is not None:
+                final_target = scope_result.target_state or TransactionState.FAILED
+                final_trigger = scope_result.trigger or StateTrigger.GATEWAY_TIMEOUT.value
+                err_code = scope_result.error_code or "GATEWAY_ERROR"
+                err_msg = scope_result.error_message or str(caught_exception)
+            else:
+                if scope_result.target_state is None:
+                    raise ValueError(
+                        "Gateway transition scope exited without specifying target_state via "
+                        "scope.set_success(...) or scope.set_failure(...)."
+                    )
+                final_target = scope_result.target_state
+                final_trigger = scope_result.trigger or StateTrigger.GATEWAY_RESPONSE.value
+                err_code = scope_result.error_code
+                err_msg = scope_result.error_message
+
+            await self._execute_transition_step(
+                session=sess,
+                transaction_id=transaction_id,
+                target_state=final_target,
+                trigger=final_trigger,
+                actor_id=actor_id,
+                gateway_payload=scope_result.gateway_payload,
+                transition_metadata=scope_result.transition_metadata,
+                gateway_id=gateway_id,
+                gateway_transaction_id=scope_result.gateway_transaction_id,
+                gateway_reference_id=scope_result.gateway_reference_id,
+                error_code=err_code,
+                error_message=err_msg,
+            )
         # Post-call lock is completely RELEASED here!
 
         if caught_exception is not None:
@@ -507,19 +512,19 @@ class TransactionStateMachine:
         self,
         transaction_id: uuid.UUID,
         in_flight_state: TransactionState,
-        trigger: Union[str, StateTrigger],
+        trigger: str | StateTrigger,
         actor_id: str,
         gateway_call: Callable[[], Awaitable[T]],
         on_success_state: TransactionState,
         on_failure_state: TransactionState,
-        gateway_id: Optional[str] = None,
-        extract_success_details: Optional[
-            Callable[[T], Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]]
-        ] = None,
-        extract_failure_details: Optional[
-            Callable[[Exception], Tuple[Optional[str], Optional[str], Optional[Dict[str, Any]]]]
-        ] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        gateway_id: str | None = None,
+        extract_success_details: (
+            Callable[[T], tuple[str | None, str | None, dict[str, Any] | None]] | None
+        ) = None,
+        extract_failure_details: (
+            Callable[[Exception], tuple[str | None, str | None, dict[str, Any] | None]] | None
+        ) = None,
+        metadata: dict[str, Any] | None = None,
     ) -> GatewayExecutionResult[T]:
         """
         Orchestrates a gateway call around two separate short-lived pessimistic locks.
@@ -551,7 +556,9 @@ class TransactionStateMachine:
 
             # Retrieve refreshed transaction
             async with self._session_maker() as sess:
-                res = await sess.execute(select(Transactions).where(Transactions.id == transaction_id))
+                res = await sess.execute(
+                    select(Transactions).where(Transactions.id == transaction_id)
+                )
                 updated_txn = res.scalar_one()
 
             return GatewayExecutionResult(
@@ -563,7 +570,9 @@ class TransactionStateMachine:
         except Exception as exc:
             # Failure transition was recorded in gateway_transition_scope __aexit__
             async with self._session_maker() as sess:
-                res = await sess.execute(select(Transactions).where(Transactions.id == transaction_id))
+                res = await sess.execute(
+                    select(Transactions).where(Transactions.id == transaction_id)
+                )
                 updated_txn = res.scalar_one_or_none()
 
             return GatewayExecutionResult(

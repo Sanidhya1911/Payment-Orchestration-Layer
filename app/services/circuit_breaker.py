@@ -1,12 +1,9 @@
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import (
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    Optional,
     TypeVar,
 )
 
@@ -25,7 +22,7 @@ T = TypeVar("T")
 class CircuitBreaker:
     """
     Finite-State Circuit Breaker enforcing high-availability gateway resilience.
-    
+
     States:
     - CLOSED: Normal operation. Successes reset failure counts. Consecutive failures trip to OPEN.
     - OPEN: Fails-fast immediately without invoking the external gateway. Allows 2-second failover.
@@ -48,7 +45,7 @@ class CircuitBreaker:
         self._state: CircuitBreakerStatus = CircuitBreakerStatus.CLOSED
         self._consecutive_failures: int = 0
         self._consecutive_successes: int = 0
-        self._tripped_at: Optional[float] = None
+        self._tripped_at: float | None = None
         self._last_state_change: float = time.monotonic()
         self._lock = asyncio.Lock()
 
@@ -68,7 +65,10 @@ class CircuitBreaker:
     @property
     def is_available(self) -> bool:
         """Returns True if the circuit breaker will allow an execution attempt."""
-        return self.state in (CircuitBreakerStatus.CLOSED, CircuitBreakerStatus.HALF_OPEN)
+        return self.state in (
+            CircuitBreakerStatus.CLOSED,
+            CircuitBreakerStatus.HALF_OPEN,
+        )
 
     async def record_success(self) -> None:
         """Records a successful gateway call, handling recovery transitions."""
@@ -178,7 +178,7 @@ class CircuitBreakerRegistry:
     def __init__(self, failure_threshold: int = 3, recovery_timeout: float = 2.0):
         self.default_failure_threshold = failure_threshold
         self.default_recovery_timeout = recovery_timeout
-        self._breakers: Dict[str, CircuitBreaker] = {}
+        self._breakers: dict[str, CircuitBreaker] = {}
         self._lock = asyncio.Lock()
 
     def get(self, gateway_id: str) -> CircuitBreaker:
@@ -200,4 +200,3 @@ class CircuitBreakerRegistry:
 
 # Global Singleton Registry
 circuit_breaker_registry = CircuitBreakerRegistry()
-

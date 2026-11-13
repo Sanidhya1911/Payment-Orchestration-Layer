@@ -1,10 +1,10 @@
 import asyncio
 import logging
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from sqlalchemy import desc, or_, select
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.database import async_session_maker
@@ -25,7 +25,7 @@ class ReconciledTransactionResult:
     gateway_id: str
     gateway_status: str
     overridden: bool
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -36,9 +36,9 @@ class ReconciliationReport:
     cutoff_minutes: int
     started_at: datetime
     completed_at: datetime
-    items: List[ReconciledTransactionResult] = field(default_factory=list)
+    items: list[ReconciledTransactionResult] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "scanned_count": self.scanned_count,
             "stuck_count": self.stuck_count,
@@ -71,22 +71,22 @@ class ReconciliationEngine:
     """
 
     CRON_INTERVAL_SECONDS: int = 15 * 60  # Every 15 minutes
-    DEFAULT_CUTOFF_MINUTES: int = 5       # Stuck > 5 minutes
+    DEFAULT_CUTOFF_MINUTES: int = 5  # Stuck > 5 minutes
 
     def __init__(
         self,
-        router: Optional[GatewayRouter] = None,
-        session_maker: Optional[async_sessionmaker[AsyncSession]] = None,
+        router: GatewayRouter | None = None,
+        session_maker: async_sessionmaker[AsyncSession] | None = None,
     ):
         self.router = router or gateway_router
         self._session_maker = session_maker or async_session_maker
         self.state_machine = TransactionStateMachine(session_maker=self._session_maker)
         self._is_running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
 
     async def reconcile_stuck_transactions(
         self,
-        db: Optional[AsyncSession] = None,
+        db: AsyncSession | None = None,
         cutoff_minutes: int = DEFAULT_CUTOFF_MINUTES,
     ) -> ReconciliationReport:
         """
@@ -94,14 +94,18 @@ class ReconciliationEngine:
         Finds transactions stuck in AUTH_INITIATED or CAPTURE_INITIATED for > cutoff_minutes,
         queries the respective gateway, and resolves mismatches via RECONCILIATION_OVERRIDE.
         """
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         cutoff_timestamp = start_time - timedelta(minutes=cutoff_minutes)
 
         if db is not None:
-            return await self._execute_reconciliation(db, cutoff_timestamp, cutoff_minutes, start_time)
+            return await self._execute_reconciliation(
+                db, cutoff_timestamp, cutoff_minutes, start_time
+            )
         else:
             async with self._session_maker() as session:
-                return await self._execute_reconciliation(session, cutoff_timestamp, cutoff_minutes, start_time)
+                return await self._execute_reconciliation(
+                    session, cutoff_timestamp, cutoff_minutes, start_time
+                )
 
     async def _execute_reconciliation(
         self,
@@ -127,7 +131,7 @@ class ReconciliationEngine:
         res = await session.execute(stmt)
         stuck_transactions = list(res.scalars().all())
 
-        items: List[ReconciledTransactionResult] = []
+        items: list[ReconciledTransactionResult] = []
         overridden_count = 0
 
         for txn in stuck_transactions:
@@ -163,7 +167,7 @@ class ReconciliationEngine:
                 )
                 continue
 
-            target_state: Optional[TransactionState] = None
+            target_state: TransactionState | None = None
 
             # 3. Determine if there is a status mismatch
             if curr_state == TransactionState.AUTH_INITIATED.value:
@@ -198,11 +202,14 @@ class ReconciliationEngine:
                     "previous_stuck_state": curr_state,
                     "polled_gateway": gateway_id,
                     "upstream_gateway_status": true_gw_status,
-                    "reconciliation_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "reconciliation_timestamp": datetime.now(UTC).isoformat(),
                 }
 
                 try:
-                    if curr_state == TransactionState.AUTH_INITIATED.value and target_state == TransactionState.CAPTURED:
+                    if (
+                        curr_state == TransactionState.AUTH_INITIATED.value
+                        and target_state == TransactionState.CAPTURED
+                    ):
                         # Advance through state machine graph: AUTH_INITIATED -> AUTHORISED -> CAPTURE_INITIATED -> CAPTURED
                         await self.state_machine.transition(
                             transaction_id=txn_id,
@@ -278,7 +285,7 @@ class ReconciliationEngine:
                     )
                 )
 
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
         return ReconciliationReport(
             scanned_count=len(stuck_transactions),
             stuck_count=len(stuck_transactions),
@@ -311,7 +318,11 @@ class ReconciliationEngine:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error("Error during scheduled reconciliation cycle: %s", exc, exc_info=True)
+                logger.error(
+                    "Error during scheduled reconciliation cycle: %s",
+                    exc,
+                    exc_info=True,
+                )
 
     def start_cron(self) -> None:
         """Starts the standing background cron job."""

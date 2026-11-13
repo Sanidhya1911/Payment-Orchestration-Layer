@@ -106,8 +106,8 @@ class UPIGateway(PaymentGateway):
 
         raw_payload = {
             "txnId": gw_id,
-            "status": "SUCCESS" if resolved_status in ("AUTHORIZED", "CAPTURED") else "FAILURE",
-            "responseCode": "00" if resolved_status in ("AUTHORIZED", "CAPTURED") else "U30",
+            "status": ("SUCCESS" if resolved_status in ("AUTHORIZED", "CAPTURED") else "FAILURE"),
+            "responseCode": ("00" if resolved_status in ("AUTHORIZED", "CAPTURED") else "U30"),
             "reconciliation_status": resolved_status,
         }
 
@@ -118,4 +118,3 @@ class UPIGateway(PaymentGateway):
             raw_payload=raw_payload,
             latency_ms=latency_ms,
         )
-

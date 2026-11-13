@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
-from app.core.enums import PaymentMethod, TransactionState
+from app.core.enums import PaymentMethod
 
 
 class PaymentCreateRequest(BaseModel):
@@ -11,9 +12,10 @@ class PaymentCreateRequest(BaseModel):
     Standardized payload for initiating a payment through the orchestration layer.
     STRICT FINANCIAL INVARIANT: Amount must be an integer representing minor units (paise/cents).
     """
+
     merchant_id: str = Field(..., max_length=100, examples=["merch_live_948271"])
     order_id: str = Field(..., max_length=100, examples=["ord_20261113_1109"])
-    customer_id: Optional[str] = Field(None, max_length=100, examples=["cust_882910"])
+    customer_id: str | None = Field(None, max_length=100, examples=["cust_882910"])
 
     # Strict BIGINT minor units: paise / cents
     amount: int = Field(
@@ -30,11 +32,11 @@ class PaymentCreateRequest(BaseModel):
         examples=["INR"],
     )
     payment_method: PaymentMethod = Field(..., examples=[PaymentMethod.UPI])
-    payment_method_details: Optional[Dict[str, Any]] = Field(
+    payment_method_details: dict[str, Any] | None = Field(
         default_factory=dict,
         examples=[{"vpa": "customer@okhdfcbank"}],
     )
-    preferred_gateway: Optional[str] = Field(
+    preferred_gateway: str | None = Field(
         None,
         description="Optional preferred gateway override (e.g. upi, razorpay, stripe, payu)",
         examples=["upi"],
@@ -43,7 +45,7 @@ class PaymentCreateRequest(BaseModel):
         default=True,
         description="If True, captures automatically upon authorization",
     )
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: dict[str, Any] | None = Field(default_factory=dict)
 
     @field_validator("currency")
     @classmethod
@@ -63,16 +65,17 @@ class PaymentCreateRequest(BaseModel):
 
 class PaymentCaptureRequest(BaseModel):
     """Payload to capture an authorized payment transaction."""
-    amount: Optional[int] = Field(
+
+    amount: int | None = Field(
         None,
         gt=0,
         description="Amount to capture in minor units. Defaults to full authorized amount if omitted.",
     )
-    currency: Optional[str] = Field(None, min_length=3, max_length=3)
+    currency: str | None = Field(None, min_length=3, max_length=3)
 
     @field_validator("amount")
     @classmethod
-    def validate_amount_not_float(cls, v: Any) -> Optional[int]:
+    def validate_amount_not_float(cls, v: Any) -> int | None:
         if isinstance(v, float):
             raise ValueError("Floating-point amounts prohibited. Specify integer minor units.")
         return int(v) if v is not None else None
@@ -80,16 +83,17 @@ class PaymentCaptureRequest(BaseModel):
 
 class PaymentRefundRequest(BaseModel):
     """Payload to refund settled funds."""
-    amount: Optional[int] = Field(
+
+    amount: int | None = Field(
         None,
         gt=0,
         description="Amount to refund in minor units. Defaults to remaining refundable balance if omitted.",
     )
-    reason: Optional[str] = Field(None, max_length=255, examples=["Customer requested cancellation"])
+    reason: str | None = Field(None, max_length=255, examples=["Customer requested cancellation"])
 
     @field_validator("amount")
     @classmethod
-    def validate_amount_not_float(cls, v: Any) -> Optional[int]:
+    def validate_amount_not_float(cls, v: Any) -> int | None:
         if isinstance(v, float):
             raise ValueError("Floating-point amounts prohibited. Specify integer minor units.")
         return int(v) if v is not None else None
@@ -97,27 +101,33 @@ class PaymentRefundRequest(BaseModel):
 
 class PaymentResponse(BaseModel):
     """Unified API response model for payment entities."""
+
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     merchant_id: str
     order_id: str
-    customer_id: Optional[str] = None
+    customer_id: str | None = None
     amount: int
     currency: str
     status: str
     payment_method: str
-    gateway_id: Optional[str] = None
-    gateway_transaction_id: Optional[str] = None
-    gateway_reference_id: Optional[str] = None
+    gateway_id: str | None = None
+    gateway_transaction_id: str | None = None
+    gateway_reference_id: str | None = None
     refunded_amount: int = 0
     created_at: datetime
     updated_at: datetime
-    metadata: Optional[Dict[str, Any]] = Field(default=None, validation_alias="metadata_")
+    metadata: dict[str, Any] | None = Field(default=None, validation_alias="metadata_")
 
     @computed_field
     @property
     def captured_amount(self) -> int:
-        if self.status in ("CAPTURED", "REFUNDED", "REFUND_INITIATED", "PARTIALLY_CAPTURED"):
+        if self.status in (
+            "CAPTURED",
+            "REFUNDED",
+            "REFUND_INITIATED",
+            "PARTIALLY_CAPTURED",
+        ):
             return self.amount
         return 0

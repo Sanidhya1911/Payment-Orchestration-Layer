@@ -1,4 +1,5 @@
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+
 from app.core.config import settings
 
 
@@ -40,7 +42,7 @@ sync_engine = create_engine(
 )
 
 
-async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_async_db() -> AsyncGenerator[AsyncSession]:
     """
     FastAPI dependency yielding a transactional async database session.
     Automatically rolls back on uncaught exceptions.
@@ -54,4 +56,3 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
-

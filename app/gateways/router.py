@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from app.core.enums import CircuitBreakerStatus
 from app.gateways.base import GatewayAuthRequest, GatewayAuthResponse, PaymentGateway
@@ -14,7 +14,10 @@ from app.gateways.payu import PayUGateway
 from app.gateways.razorpay import RazorpayGateway
 from app.gateways.stripe import StripeGateway
 from app.gateways.upi import UPIGateway
-from app.services.circuit_breaker import CircuitBreakerRegistry, circuit_breaker_registry
+from app.services.circuit_breaker import (
+    CircuitBreakerRegistry,
+    circuit_breaker_registry,
+)
 from app.services.scoring import (
     GatewayMetrics,
     MultiCriteriaScorer,
@@ -25,7 +28,7 @@ logger = logging.getLogger("payment_layer.gateway_router")
 
 
 # Default Operational Benchmarks for Initialized Gateways
-DEFAULT_GATEWAY_BENCHMARKS: Dict[str, Dict[str, Any]] = {
+DEFAULT_GATEWAY_BENCHMARKS: dict[str, dict[str, Any]] = {
     "upi": {
         "success_rate": 0.98,
         "p95_latency_ms": 120.0,
@@ -60,14 +63,14 @@ DEFAULT_GATEWAY_BENCHMARKS: Dict[str, Dict[str, Any]] = {
 class GatewayRouter:
     """
     Intelligent Payment Gateway Router driven by Multi-Criteria Scoring & Circuit Breakers.
-    
+
     Formula:
     Score = (W_success * NormSuccess)
           + (W_latency * (1 - NormLatency))
           + (W_cost * (1 - NormCost))
           + (W_health * HealthScore)
           + (W_fit * FitScore)
-          
+
     Automatic Failover Behavior:
     - Calculates dynamic scores for all candidate gateways.
     - Evaluates in descending order of dynamic multi-criteria score.
@@ -77,19 +80,19 @@ class GatewayRouter:
 
     def __init__(
         self,
-        registry: Optional[CircuitBreakerRegistry] = None,
-        gateways: Optional[Dict[str, PaymentGateway]] = None,
-        scorer: Optional[MultiCriteriaScorer] = None,
+        registry: CircuitBreakerRegistry | None = None,
+        gateways: dict[str, PaymentGateway] | None = None,
+        scorer: MultiCriteriaScorer | None = None,
     ):
         self.circuit_breakers = registry or circuit_breaker_registry
-        self.gateways: Dict[str, PaymentGateway] = gateways or {
+        self.gateways: dict[str, PaymentGateway] = gateways or {
             "razorpay": RazorpayGateway(),
             "stripe": StripeGateway(),
             "payu": PayUGateway(),
             "upi": UPIGateway(),
         }
         self.scorer = scorer or MultiCriteriaScorer()
-        self._metrics: Dict[str, GatewayMetrics] = {}
+        self._metrics: dict[str, GatewayMetrics] = {}
         self._init_default_metrics()
 
     def _init_default_metrics(self) -> None:
@@ -107,7 +110,7 @@ class GatewayRouter:
     def register_gateway(
         self,
         gateway: PaymentGateway,
-        metrics: Optional[GatewayMetrics] = None,
+        metrics: GatewayMetrics | None = None,
     ) -> None:
         """Registers a payment gateway and its operational metrics."""
         gid = gateway.gateway_id.lower().strip()
@@ -128,7 +131,7 @@ class GatewayRouter:
         """Sets custom or updated metrics for a gateway."""
         self._metrics[gateway_id.lower().strip()] = metrics
 
-    def get_gateway_metrics(self, gateway_id: str) -> Optional[GatewayMetrics]:
+    def get_gateway_metrics(self, gateway_id: str) -> GatewayMetrics | None:
         """Retrieves current metrics for a gateway."""
         return self._metrics.get(gateway_id.lower().strip())
 
@@ -136,21 +139,21 @@ class GatewayRouter:
         """Returns the current Circuit Breaker status for a gateway."""
         return self.circuit_breakers.get(gateway_id).state
 
-    def get_gateway(self, gateway_id: str) -> Optional[PaymentGateway]:
+    def get_gateway(self, gateway_id: str) -> PaymentGateway | None:
         """Returns the gateway adapter instance for the specified identifier."""
         return self.gateways.get(gateway_id.lower().strip())
 
     def rank_gateways(
         self,
         request: GatewayAuthRequest,
-        candidate_ids: Optional[List[str]] = None,
-    ) -> List[ScoreBreakdown]:
+        candidate_ids: list[str] | None = None,
+    ) -> list[ScoreBreakdown]:
         """
         Dynamically calculates multi-criteria scores for candidate gateways and returns
         them ranked in descending order (highest score first).
         """
         target_ids = [gid.lower().strip() for gid in (candidate_ids or list(self.gateways.keys()))]
-        candidates: List[GatewayMetrics] = []
+        candidates: list[GatewayMetrics] = []
 
         for gid in target_ids:
             if gid not in self.gateways:
@@ -188,8 +191,8 @@ class GatewayRouter:
     async def route_and_execute(
         self,
         request: GatewayAuthRequest,
-        candidate_ids: Optional[List[str]] = None,
-    ) -> Tuple[GatewayAuthResponse, str, List[Dict[str, Any]]]:
+        candidate_ids: list[str] | None = None,
+    ) -> tuple[GatewayAuthResponse, str, list[dict[str, Any]]]:
         """
         Core multi-criteria dynamic routing algorithm with failover:
         1. Ranks all candidates using the multi-criteria formula.
@@ -210,8 +213,8 @@ class GatewayRouter:
             [(s.gateway_id, round(s.total_score, 4)) for s in ranked_scores],
         )
 
-        routing_trace: List[Dict[str, Any]] = []
-        last_exception: Optional[Exception] = None
+        routing_trace: list[dict[str, Any]] = []
+        last_exception: Exception | None = None
 
         for ranking in ranked_scores:
             gw_id = ranking.gateway_id
@@ -287,8 +290,8 @@ class GatewayRouter:
     async def execute_with_failover(
         self,
         request: GatewayAuthRequest,
-        priority_gateways: Optional[List[str]] = None,
-    ) -> Tuple[GatewayAuthResponse, str, List[Dict[str, Any]]]:
+        priority_gateways: list[str] | None = None,
+    ) -> tuple[GatewayAuthResponse, str, list[dict[str, Any]]]:
         """
         Executes payment authorization with failover.
         If priority_gateways is explicitly specified, evaluates in that explicit priority order.
@@ -297,8 +300,8 @@ class GatewayRouter:
         if not priority_gateways:
             return await self.route_and_execute(request=request)
 
-        routing_trace: List[Dict[str, Any]] = []
-        last_exception: Optional[Exception] = None
+        routing_trace: list[dict[str, Any]] = []
+        last_exception: Exception | None = None
 
         for gw_name in priority_gateways:
             gw_id = gw_name.lower().strip()

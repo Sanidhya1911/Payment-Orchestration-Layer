@@ -1,5 +1,5 @@
 import uuid
-from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +32,7 @@ async def register_gateway(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Gateway with id '{payload.id}' already exists."
+            detail=f"Gateway with id '{payload.id}' already exists.",
         )
 
     gateway = GatewayConfig(
@@ -53,7 +53,7 @@ async def register_gateway(
     return gateway
 
 
-@router.get("", response_model=List[GatewayConfigResponse])
+@router.get("", response_model=list[GatewayConfigResponse])
 async def list_gateways(
     db: AsyncSession = Depends(get_async_db),
 ):
@@ -81,7 +81,11 @@ async def create_routing_policy(
     )
     db.add(routing_cfg)
     await db.flush()
-    return {"id": routing_cfg.id, "name": routing_cfg.name, "is_active": routing_cfg.is_active}
+    return {
+        "id": routing_cfg.id,
+        "name": routing_cfg.name,
+        "is_active": routing_cfg.is_active,
+    }
 
 
 @router.post("/routes", status_code=status.HTTP_201_CREATED)
@@ -97,7 +101,7 @@ async def create_gateway_route(
     if not gateway:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Referenced gateway '{payload.gateway_id}' does not exist."
+            detail=f"Referenced gateway '{payload.gateway_id}' does not exist.",
         )
 
     route = GatewayRoutes(
@@ -117,7 +121,11 @@ async def create_gateway_route(
     return {"id": route.id, "gateway_id": route.gateway_id, "priority": route.priority}
 
 
-@router.post("/evaluate-routing", response_model=EvaluateRoutingResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/evaluate-routing",
+    response_model=EvaluateRoutingResponse,
+    status_code=status.HTTP_200_OK,
+)
 async def evaluate_dynamic_routes(
     payload: EvaluateRoutingRequest,
 ):
@@ -168,5 +176,3 @@ async def evaluate_dynamic_routes(
         selected_primary_gateway=ranked[0].gateway_id,
         ranked_gateways=score_items,
     )
-
-

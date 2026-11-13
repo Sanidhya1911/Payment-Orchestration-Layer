@@ -6,6 +6,7 @@ class TransactionState(str, Enum):
     Deterministic 12-state transaction life-cycle states.
     All transitions must adhere to the deterministic state machine graph.
     """
+
     CREATED = "CREATED"
     ROUTE_SELECTED = "ROUTE_SELECTED"
     AUTH_INITIATED = "AUTH_INITIATED"

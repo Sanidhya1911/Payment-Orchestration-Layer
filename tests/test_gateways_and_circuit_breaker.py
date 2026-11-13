@@ -1,6 +1,7 @@
 import asyncio
 import time
 import uuid
+
 import pytest
 
 from app.core.enums import CircuitBreakerStatus, GatewayType
@@ -236,7 +237,9 @@ async def test_circuit_breaker_half_open_failure_re_trips_to_open():
 # 3. RESILIENT ROUTING & FAILOVER TO ALTERNATE GATEWAY WITHIN 2 SECONDS
 # =============================================================================
 @pytest.mark.anyio
-async def test_router_fails_over_to_alternate_gateway_when_primary_trips(sample_auth_request):
+async def test_router_fails_over_to_alternate_gateway_when_primary_trips(
+    sample_auth_request,
+):
     """
     MANDATE:
     If a gateway times out repeatedly, it trips to OPEN and fails-fast,
@@ -287,4 +290,3 @@ async def test_router_fails_over_to_alternate_gateway_when_primary_trips(sample_
     assert trace[0]["status"] == "CIRCUIT_OPEN_FAST_FAIL"
     assert trace[1]["gateway"] == "stripe"
     assert trace[1]["status"] == "SUCCESS"
-

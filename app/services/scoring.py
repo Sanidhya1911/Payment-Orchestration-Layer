@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from app.core.enums import CircuitBreakerStatus
 
@@ -8,20 +8,21 @@ from app.core.enums import CircuitBreakerStatus
 # =============================================================================
 WEIGHT_SUCCESS = 0.35  # 35% - Success Rate
 WEIGHT_LATENCY = 0.20  # 20% - P95 Latency
-WEIGHT_COST = 0.20     # 20% - Cost Efficiency
-WEIGHT_HEALTH = 0.15   # 15% - Gateway Health & Circuit Breaker State
-WEIGHT_FIT = 0.10      # 10% - Payment Method & Currency Compatibility
+WEIGHT_COST = 0.20  # 20% - Cost Efficiency
+WEIGHT_HEALTH = 0.15  # 15% - Gateway Health & Circuit Breaker State
+WEIGHT_FIT = 0.10  # 10% - Payment Method & Currency Compatibility
 
 
 @dataclass
 class GatewayMetrics:
     """Telemetry and operational metrics for a payment gateway adapter."""
+
     gateway_id: str
-    success_rate: float            # e.g. 0.98 for 98%
-    p95_latency_ms: float          # e.g. 150.0 ms
-    cost_basis_points: float       # e.g. 180.0 bps (1.8%) or 0 for UPI
-    supported_methods: Set[str] = field(default_factory=set)
-    supported_currencies: Set[str] = field(default_factory=set)
+    success_rate: float  # e.g. 0.98 for 98%
+    p95_latency_ms: float  # e.g. 150.0 ms
+    cost_basis_points: float  # e.g. 180.0 bps (1.8%) or 0 for UPI
+    supported_methods: set[str] = field(default_factory=set)
+    supported_currencies: set[str] = field(default_factory=set)
     circuit_status: CircuitBreakerStatus = CircuitBreakerStatus.CLOSED
     consecutive_failures: int = 0
 
@@ -29,6 +30,7 @@ class GatewayMetrics:
 @dataclass
 class ScoreBreakdown:
     """Detailed score breakdown calculated for a gateway candidate."""
+
     gateway_id: str
     total_score: float
     norm_success: float
@@ -37,9 +39,9 @@ class ScoreBreakdown:
     health_score: float
     fit_score: float
     circuit_status: CircuitBreakerStatus
-    raw_metrics: Optional[GatewayMetrics] = None
+    raw_metrics: GatewayMetrics | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "gateway_id": self.gateway_id,
             "total_score": round(self.total_score, 4),
@@ -55,7 +57,7 @@ class ScoreBreakdown:
 class MultiCriteriaScorer:
     """
     Evaluates and ranks payment gateways using the exact architectural formula:
-    
+
     Score = (W_success * NormSuccess)
           + (W_latency * (1 - NormLatency))
           + (W_cost * (1 - NormCost))
@@ -134,10 +136,10 @@ class MultiCriteriaScorer:
 
     def score_candidates(
         self,
-        candidates: List[GatewayMetrics],
+        candidates: list[GatewayMetrics],
         requested_method: str,
         requested_currency: str,
-    ) -> List[ScoreBreakdown]:
+    ) -> list[ScoreBreakdown]:
         """
         Evaluates a list of candidate gateways and returns their score breakdowns
         sorted descending by total_score.
@@ -152,7 +154,7 @@ class MultiCriteriaScorer:
         min_lat, max_lat = min(latencies), max(latencies)
         min_cost, max_cost = min(costs), max(costs)
 
-        scores: List[ScoreBreakdown] = []
+        scores: list[ScoreBreakdown] = []
 
         for c in candidates:
             # 1. NormSuccess [0.0, 1.0]
@@ -207,4 +209,3 @@ class MultiCriteriaScorer:
         # Sort descending: highest-scoring gateway first
         scores.sort(key=lambda s: s.total_score, reverse=True)
         return scores
-

@@ -1,6 +1,7 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
 import uuid
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -10,12 +11,12 @@ from app.core.enums import StateTrigger, TransactionState
 from app.gateways.router import gateway_router
 from app.main import app
 from app.models.transaction import Transactions, TransactionStateLog
-from app.services.reconciliation import ReconciliationEngine, reconciliation_engine
-
+from app.services.reconciliation import ReconciliationEngine
 
 # =============================================================================
 # 1. PAYMENTS REST API TESTS
 # =============================================================================
+
 
 @pytest.mark.anyio
 async def test_create_payment_successful_auth_and_capture(test_session_maker):
@@ -23,6 +24,7 @@ async def test_create_payment_successful_auth_and_capture(test_session_maker):
     Tests POST /api/v1/payments:
     Initiates payment, dynamically scores gateways, transitions states, and auto-captures.
     """
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -104,6 +106,7 @@ async def test_create_payment_gateway_decline_uniform_error_format(test_session_
     and details.gateway_error_code.
     Simulates bank decline via X-Mock-Response: decline header.
     """
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -145,6 +148,7 @@ async def test_create_payment_gateway_decline_uniform_error_format(test_session_
 @pytest.mark.anyio
 async def test_create_payment_gateway_timeout_uniform_error_format(test_session_maker):
     """Simulates gateway timeout and verifies uniform error response with 504 status."""
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -182,6 +186,7 @@ async def test_create_payment_gateway_timeout_uniform_error_format(test_session_
 # 2. CAPTURE & REFUND REST API TESTS
 # =============================================================================
 
+
 @pytest.mark.anyio
 async def test_capture_payment_lifecycle_and_illegal_transitions(test_session_maker):
     """
@@ -190,6 +195,7 @@ async def test_capture_payment_lifecycle_and_illegal_transitions(test_session_ma
     2. 422 for illegal transition (trying to capture a CREATED transaction).
     3. 200 for valid capture of an AUTHORISED transaction.
     """
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -265,6 +271,7 @@ async def test_refund_payment_lifecycle_and_validation(test_session_maker):
     2. 400 when attempting to refund an amount exceeding captured funds.
     3. 200 for successful partial and full refunds.
     """
+
     async def override_get_db():
         async with test_session_maker() as session:
             yield session
@@ -318,8 +325,11 @@ async def test_refund_payment_lifecycle_and_validation(test_session_maker):
 # 3. RECONCILIATION ENGINE TESTS
 # =============================================================================
 
+
 @pytest.mark.anyio
-async def test_reconciliation_detects_stuck_transactions_and_generates_override_log(test_session_maker):
+async def test_reconciliation_detects_stuck_transactions_and_generates_override_log(
+    test_session_maker,
+):
     """
     STRICT MANDATE:
     Build a Reconciliation Engine (background cron job) that runs every 15 minutes.
@@ -332,8 +342,8 @@ async def test_reconciliation_detects_stuck_transactions_and_generates_override_
         session_maker=test_session_maker,
     )
 
-    now = datetime.now(timezone.utc)
-    stuck_time = now - timedelta(minutes=10)   # Stuck > 5 minutes ago!
+    now = datetime.now(UTC)
+    stuck_time = now - timedelta(minutes=10)  # Stuck > 5 minutes ago!
     recent_time = now - timedelta(minutes=1)  # Only 1 minute ago (must be ignored)
 
     # 1. Setup mock transactions
@@ -421,8 +431,8 @@ async def test_reconciliation_detects_stuck_transactions_and_generates_override_
         logs = (await db.execute(stmt_logs)).scalars().all()
         assert len(logs) >= 2
 
-        triggers = {l.trigger for l in logs}
-        actors = {l.actor_id for l in logs}
+        triggers = {log_item.trigger for log_item in logs}
+        actors = {log_item.actor_id for log_item in logs}
         assert StateTrigger.RECONCILIATION_OVERRIDE.value in triggers
         assert "system_reconciliation_engine" in actors
 

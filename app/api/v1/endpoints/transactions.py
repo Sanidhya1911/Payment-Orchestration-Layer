@@ -1,16 +1,12 @@
-import hashlib
-import json
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_async_db
-from app.core.enums import IdempotencyStatus, StateTrigger, TransactionState, TransactionStatus
-from app.models.idempotency import IdempotencyKeys
+from app.core.enums import StateTrigger, TransactionState
 from app.models.transaction import Transactions, TransactionStateLog
 from app.schemas.transaction import (
     TransactionCreateRequest,
@@ -33,7 +29,7 @@ router = APIRouter()
 @router.post("", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
 async def create_transaction(
     payload: TransactionCreateRequest,
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: AsyncSession = Depends(get_async_db),
     idemp_service: IdempotencyService = Depends(get_idempotency_service),
 ):
@@ -89,13 +85,19 @@ async def create_transaction(
         transaction_loaded = res.scalar_one()
 
         # 3. Cache response in Idempotency Service
-        response_data = TransactionResponse.model_validate(transaction_loaded).model_dump(mode="json")
+        response_data = TransactionResponse.model_validate(transaction_loaded).model_dump(
+            mode="json"
+        )
         idemp.set_response(status_code=status.HTTP_201_CREATED, body=response_data)
 
         return transaction_loaded
 
 
-@router.post("/idempotency/cleanup", status_code=status.HTTP_200_OK, tags=["Idempotency Maintenance"])
+@router.post(
+    "/idempotency/cleanup",
+    status_code=status.HTTP_200_OK,
+    tags=["Idempotency Maintenance"],
+)
 async def cleanup_expired_idempotency_keys(
     db: AsyncSession = Depends(get_async_db),
     idemp_service: IdempotencyService = Depends(get_idempotency_service),
@@ -129,12 +131,16 @@ async def get_transaction(
     if not transaction:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Transaction {transaction_id} not found."
+            detail=f"Transaction {transaction_id} not found.",
         )
     return transaction
 
 
-@router.post("/{transaction_id}/transitions", response_model=TransactionResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/{transaction_id}/transitions",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_200_OK,
+)
 async def transition_transaction(
     transaction_id: uuid.UUID,
     payload: TransactionTransitionRequest,
@@ -172,14 +178,6 @@ async def transition_transaction(
         return res.scalar_one()
 
     except InvalidStateTransitionException as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc)
-        )
+        raise HTTPException(status_code=422, detail=str(exc))
     except TransactionNotFoundException as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(exc)
-        )
-
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))

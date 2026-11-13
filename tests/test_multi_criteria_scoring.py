@@ -1,4 +1,5 @@
 import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -9,13 +10,13 @@ from app.gateways.router import GatewayRouter
 from app.main import app
 from app.services.circuit_breaker import CircuitBreakerRegistry
 from app.services.scoring import (
-    GatewayMetrics,
-    MultiCriteriaScorer,
     WEIGHT_COST,
     WEIGHT_FIT,
     WEIGHT_HEALTH,
     WEIGHT_LATENCY,
     WEIGHT_SUCCESS,
+    GatewayMetrics,
+    MultiCriteriaScorer,
 )
 
 
@@ -25,9 +26,9 @@ def test_weights_sum_to_one():
     assert pytest.approx(total_weights, rel=1e-6) == 1.00
     assert WEIGHT_SUCCESS == 0.35  # 35%
     assert WEIGHT_LATENCY == 0.20  # 20%
-    assert WEIGHT_COST == 0.20     # 20%
-    assert WEIGHT_HEALTH == 0.15   # 15%
-    assert WEIGHT_FIT == 0.10      # 10%
+    assert WEIGHT_COST == 0.20  # 20%
+    assert WEIGHT_HEALTH == 0.15  # 15%
+    assert WEIGHT_FIT == 0.10  # 10%
 
 
 def test_multi_criteria_scoring_formula_exact_computation():
@@ -83,11 +84,11 @@ def test_multi_criteria_scoring_formula_exact_computation():
     # HealthScore = 1.0 (CLOSED)
     # FitScore = 1.0 (Exact match)
     expected_alpha = (
-        (0.35 * 0.98)           # Success: 0.3430
+        (0.35 * 0.98)  # Success: 0.3430
         + (0.20 * (1.0 - 0.0))  # Latency: 0.2000
         + (0.20 * (1.0 - 0.0))  # Cost: 0.2000
-        + (0.15 * 1.0)          # Health: 0.1500
-        + (0.10 * 1.0)          # Fit: 0.1000
+        + (0.15 * 1.0)  # Health: 0.1500
+        + (0.10 * 1.0)  # Fit: 0.1000
     )
     # Total = 0.343 + 0.20 + 0.20 + 0.15 + 0.10 = 0.9930
     assert pytest.approx(alpha_score.total_score, rel=1e-4) == expected_alpha
@@ -195,7 +196,7 @@ async def test_automatic_failover_on_primary_execution_timeout():
     await upi_breaker.record_failure(GatewayTimeoutException("Timeout"))
 
     req.mock_header = None  # Second gateway will succeed
-    response, chosen_gw, trace = await router.route_and_execute(req)
+    response, chosen_gw, _trace = await router.route_and_execute(req)
 
     assert chosen_gw == second_gw
     assert response.success is True
@@ -222,5 +223,6 @@ async def test_evaluate_routing_api_endpoint():
         assert len(data["ranked_gateways"]) >= 3
         # First ranked gateway has highest total_score
         assert data["ranked_gateways"][0]["gateway_id"] == data["selected_primary_gateway"]
-        assert data["ranked_gateways"][0]["total_score"] >= data["ranked_gateways"][1]["total_score"]
-
+        assert (
+            data["ranked_gateways"][0]["total_score"] >= data["ranked_gateways"][1]["total_score"]
+        )

@@ -3,10 +3,12 @@ import json
 import logging
 import struct
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Union
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 from fastapi import HTTPException, status
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,7 +27,8 @@ DEFAULT_IDEMPOTENCY_TTL = timedelta(hours=24)
 # =============================================================================
 class InvalidIdempotencyKeyException(HTTPException):
     """Raised when the Idempotency-Key header is not a valid UUID."""
-    def __init__(self, key: Optional[str] = None):
+
+    def __init__(self, key: str | None = None):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -40,6 +43,7 @@ class IdempotencyConflictException(HTTPException):
     Raised when a duplicate request arrives while a previous request with the same
     idempotency key is actively PROCESSING. Returns HTTP 409 Conflict with Retry-After.
     """
+
     def __init__(self, key: str, retry_after_seconds: int = 2):
         self.key = key
         super().__init__(
@@ -58,6 +62,7 @@ class IdempotencyPayloadMismatchException(HTTPException):
     Raised when an existing idempotency key is reused with a different request payload.
     Prevents parameter tampering and inconsistent replay semantics.
     """
+
     def __init__(self, key: str):
         self.key = key
         super().__init__(
@@ -72,8 +77,8 @@ class IdempotencyPayloadMismatchException(HTTPException):
 def _ensure_utc(dt: datetime) -> datetime:
     """Guarantees datetime is timezone-aware in UTC across SQLite and PostgreSQL."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 # =============================================================================
@@ -82,30 +87,32 @@ def _ensure_utc(dt: datetime) -> datetime:
 @dataclass
 class IdempotencyResult:
     """Represents the resolution of an idempotency evaluation."""
+
     is_cached: bool
-    response_code: Optional[int] = None
-    response_body: Optional[Any] = None
-    response_headers: Optional[Dict[str, Any]] = None
-    key_record: Optional[IdempotencyKeys] = None
+    response_code: int | None = None
+    response_body: Any | None = None
+    response_headers: dict[str, Any] | None = None
+    key_record: IdempotencyKeys | None = None
 
 
 @dataclass
 class IdempotencyScopeHandle:
     """Handle passed into the idempotent_scope context manager."""
-    is_cached: bool
-    cached_code: Optional[int] = None
-    cached_response: Optional[Any] = None
-    cached_headers: Optional[Dict[str, Any]] = None
 
-    _response_code: Optional[int] = None
-    _response_body: Optional[Any] = None
-    _response_headers: Optional[Dict[str, Any]] = None
+    is_cached: bool
+    cached_code: int | None = None
+    cached_response: Any | None = None
+    cached_headers: dict[str, Any] | None = None
+
+    _response_code: int | None = None
+    _response_body: Any | None = None
+    _response_headers: dict[str, Any] | None = None
 
     def set_response(
         self,
         status_code: int,
         body: Any,
-        headers: Optional[Dict[str, Any]] = None,
+        headers: dict[str, Any] | None = None,
     ) -> None:
         """Stores the response to be cached for subsequent idempotent invocations."""
         self._response_code = status_code
@@ -119,7 +126,7 @@ class IdempotencyScopeHandle:
 class IdempotencyService:
     """
     High-performance, mission-critical idempotency and distributed locking engine.
-    
+
     Architectural Guarantees:
     1. Enforces client-generated UUID format for Idempotency-Key.
     2. Uses PostgreSQL advisory locks (pg_advisory_xact_lock) on a 64-bit hash
@@ -138,7 +145,7 @@ class IdempotencyService:
         self.ttl = ttl
 
     @classmethod
-    def validate_key(cls, key: Optional[str]) -> str:
+    def validate_key(cls, key: str | None) -> str:
         """
         Validates that the provided idempotency key is a non-empty, valid UUID.
         Raises InvalidIdempotencyKeyException if validation fails.
@@ -183,10 +190,7 @@ class IdempotencyService:
         The advisory lock is held exclusively for the duration of the current SQL transaction,
         and is released automatically when the transaction commits or rolls back.
         """
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_id)"),
-            {"lock_id": lock_id}
-        )
+        await session.execute(text("SELECT pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id})
         logger.debug("PostgreSQL transaction advisory lock acquired for lock_id=%s", lock_id)
 
     async def process_or_acquire(
@@ -206,7 +210,7 @@ class IdempotencyService:
         """
         valid_key = self.validate_key(key)
         payload_hash = self.compute_payload_hash(payload)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # 1. Acquire transaction-level PostgreSQL advisory lock
         lock_id = self.compute_advisory_lock_id(valid_key, merchant_id)
@@ -224,7 +228,11 @@ class IdempotencyService:
             # 3. Check for TTL Expiration (24 hours)
             record_expiry = _ensure_utc(record.expires_at)
             if record_expiry <= now:
-                logger.info("Idempotency key %s expired at %s. Resetting as new key.", valid_key, record.expires_at)
+                logger.info(
+                    "Idempotency key %s expired at %s. Resetting as new key.",
+                    valid_key,
+                    record.expires_at,
+                )
                 await session.delete(record)
                 await session.flush()
                 record = None
@@ -242,12 +250,19 @@ class IdempotencyService:
 
             # 5. Concurrent In-Flight Check: Status is PROCESSING -> 409 Conflict
             if record.status == IdempotencyStatus.PROCESSING.value:
-                logger.warning("Concurrent duplicate request detected for key %s (status=PROCESSING)", valid_key)
+                logger.warning(
+                    "Concurrent duplicate request detected for key %s (status=PROCESSING)",
+                    valid_key,
+                )
                 raise IdempotencyConflictException(valid_key)
 
             # 6. Idempotent Success: Status is COMPLETED -> Return Cached JSON Response
             if record.status == IdempotencyStatus.COMPLETED.value:
-                logger.info("Returning cached idempotent response for key %s (HTTP %s)", valid_key, record.response_code)
+                logger.info(
+                    "Returning cached idempotent response for key %s (HTTP %s)",
+                    valid_key,
+                    record.response_code,
+                )
                 return IdempotencyResult(
                     is_cached=True,
                     response_code=record.response_code or status.HTTP_200_OK,
@@ -282,7 +297,11 @@ class IdempotencyService:
         session.add(new_record)
         await session.flush()
 
-        logger.info("Registered new idempotency key %s (status=PROCESSING, expires_at=%s)", valid_key, expires_at)
+        logger.info(
+            "Registered new idempotency key %s (status=PROCESSING, expires_at=%s)",
+            valid_key,
+            expires_at,
+        )
         return IdempotencyResult(is_cached=False, key_record=new_record)
 
     async def save_response(
@@ -292,7 +311,7 @@ class IdempotencyService:
         merchant_id: str,
         response_code: int,
         response_body: Any,
-        response_headers: Optional[Dict[str, Any]] = None,
+        response_headers: dict[str, Any] | None = None,
     ) -> None:
         """
         Transition idempotency record to 'COMPLETED' and cache the response payload.
@@ -312,14 +331,18 @@ class IdempotencyService:
             record.response_headers = response_headers or {}
             record.locked_until = None
             await session.flush()
-            logger.info("Idempotency key %s transitioned to COMPLETED (status_code=%s)", valid_key, response_code)
+            logger.info(
+                "Idempotency key %s transitioned to COMPLETED (status_code=%s)",
+                valid_key,
+                response_code,
+            )
 
     async def mark_failed(
         self,
         session: AsyncSession,
         key: str,
         merchant_id: str,
-        error_details: Optional[Dict[str, Any]] = None,
+        error_details: dict[str, Any] | None = None,
     ) -> None:
         """
         Transitions idempotency record to 'FAILED' upon unexpected processing error.
@@ -339,13 +362,13 @@ class IdempotencyService:
             await session.flush()
             logger.warning("Idempotency key %s marked as FAILED", valid_key)
 
-    async def cleanup_expired_keys(self, session: Optional[AsyncSession] = None) -> int:
+    async def cleanup_expired_keys(self, session: AsyncSession | None = None) -> int:
         """
         Expires and cleans up idempotency keys after 24 hours.
         Deletes all rows where expires_at <= current UTC timestamp.
         Returns the number of pruned records.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         stmt = delete(IdempotencyKeys).where(IdempotencyKeys.expires_at <= now)
 
         if session is not None:
@@ -359,14 +382,18 @@ class IdempotencyService:
                 async with sess.begin():
                     res = await sess.execute(stmt)
                     deleted_count = res.rowcount
-                logger.info("Pruned %d expired idempotency keys (expired <= %s)", deleted_count, now)
+                logger.info(
+                    "Pruned %d expired idempotency keys (expired <= %s)",
+                    deleted_count,
+                    now,
+                )
                 return deleted_count
 
     @asynccontextmanager
     async def idempotent_scope(
         self,
         session: AsyncSession,
-        key: Optional[str],
+        key: str | None,
         merchant_id: str,
         request_path: str,
         payload: Any,

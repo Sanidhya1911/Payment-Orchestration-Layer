@@ -1,18 +1,11 @@
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import BigInteger, Float
+
 from app.models import (
     Base,
-    GatewayConfig,
-    GatewayHealthMetrics,
-    GatewayRoutes,
-    IdempotencyKeys,
-    ProcessedWebhookEvents,
-    RoutingConfig,
-    Transactions,
-    TransactionStateLog,
 )
 from app.schemas.transaction import TransactionCreateRequest
-from app.schemas.gateway import GatewayRouteCreate
 
 
 def test_required_tables_present():
@@ -49,26 +42,32 @@ def test_financial_amounts_strict_bigint_rule():
     assert isinstance(amount_col.type, BigInteger), "transactions.amount must be BigInteger"
     assert isinstance(fee_col.type, BigInteger), "transactions.fee_amount must be BigInteger"
     assert isinstance(tax_col.type, BigInteger), "transactions.tax_amount must be BigInteger"
-    assert isinstance(refund_col.type, BigInteger), "transactions.refunded_amount must be BigInteger"
+    assert isinstance(
+        refund_col.type, BigInteger
+    ), "transactions.refunded_amount must be BigInteger"
 
     # 2. Inspect gateway_routes table
     route_table = metadata.tables["gateway_routes"]
     min_amount_col = route_table.c.min_amount
     max_amount_col = route_table.c.max_amount
 
-    assert isinstance(min_amount_col.type, BigInteger), "gateway_routes.min_amount must be BigInteger"
-    assert isinstance(max_amount_col.type, BigInteger), "gateway_routes.max_amount must be BigInteger"
+    assert isinstance(
+        min_amount_col.type, BigInteger
+    ), "gateway_routes.min_amount must be BigInteger"
+    assert isinstance(
+        max_amount_col.type, BigInteger
+    ), "gateway_routes.max_amount must be BigInteger"
 
     # 3. Global scan across ALL tables: Ensure no Float or Double precision columns exist for amounts
     for table in metadata.tables.values():
         for col in table.columns:
             if "amount" in col.name.lower():
-                assert not isinstance(col.type, Float), (
-                    f"Forbidden Float detected in financial column {table.name}.{col.name}"
-                )
-                assert isinstance(col.type, BigInteger), (
-                    f"Financial column {table.name}.{col.name} must be BigInteger (paise/cents)"
-                )
+                assert not isinstance(
+                    col.type, Float
+                ), f"Forbidden Float detected in financial column {table.name}.{col.name}"
+                assert isinstance(
+                    col.type, BigInteger
+                ), f"Financial column {table.name}.{col.name} must be BigInteger (paise/cents)"
 
 
 def test_processed_webhook_events_composite_pk():
@@ -79,12 +78,13 @@ def test_processed_webhook_events_composite_pk():
     webhook_table = Base.metadata.tables["processed_webhook_events"]
     pk_column_names = [col.name for col in webhook_table.primary_key.columns]
 
-    assert len(pk_column_names) == 2, (
-        f"Expected 2 columns in composite PK, found {len(pk_column_names)}: {pk_column_names}"
-    )
-    assert set(pk_column_names) == {"gateway", "event_id"}, (
-        f"Composite PK must be exactly ('gateway', 'event_id'), got {pk_column_names}"
-    )
+    assert (
+        len(pk_column_names) == 2
+    ), f"Expected 2 columns in composite PK, found {len(pk_column_names)}: {pk_column_names}"
+    assert set(pk_column_names) == {
+        "gateway",
+        "event_id",
+    }, f"Composite PK must be exactly ('gateway', 'event_id'), got {pk_column_names}"
 
 
 def test_transaction_state_log_immutability():
@@ -97,9 +97,13 @@ def test_transaction_state_log_immutability():
     log_table = Base.metadata.tables["transaction_state_log"]
     column_names = [col.name for col in log_table.columns]
 
-    assert "updated_at" not in column_names, "transaction_state_log must be immutable: no updated_at column allowed"
+    assert (
+        "updated_at" not in column_names
+    ), "transaction_state_log must be immutable: no updated_at column allowed"
     assert "created_at" in column_names, "transaction_state_log must have created_at timestamp"
-    assert isinstance(log_table.c.id.type, BigInteger), "transaction_state_log.id must be BigInteger"
+    assert isinstance(
+        log_table.c.id.type, BigInteger
+    ), "transaction_state_log.id must be BigInteger"
 
     # Verify foreign key to transactions.id
     fk_targets = [fk.target_fullname for fk in log_table.foreign_keys]
@@ -109,7 +113,7 @@ def test_transaction_state_log_immutability():
 def test_pydantic_schema_rejects_floating_point_amounts():
     """Verify API schema level enforcement rejects floats for amounts."""
     # Attempting to supply a float (e.g. 500.50) MUST raise ValidationError
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         TransactionCreateRequest(
             merchant_id="m_123",
             order_id="ord_999",

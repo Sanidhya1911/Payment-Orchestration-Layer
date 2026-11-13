@@ -1,5 +1,6 @@
 import os
 import sys
+
 import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+
 from app.models import Base
 
 # Ensure root workspace directory is in sys.path

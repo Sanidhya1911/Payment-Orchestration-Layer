@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
@@ -11,11 +12,7 @@ from sqlalchemy.ext.asyncio import (
 from app.core.enums import StateTrigger, TransactionState
 from app.models import Base, Transactions, TransactionStateLog
 from app.services.state_machine import (
-    ALLOWED_TRANSITIONS,
-    ConcurrentStateMutationException,
-    GatewayExecutionResult,
     InvalidStateTransitionException,
-    TransactionNotFoundException,
     TransactionStateMachine,
 )
 
@@ -39,20 +36,19 @@ async def test_db_session_maker():
 @pytest.fixture
 async def sample_transaction(test_db_session_maker) -> Transactions:
     """Creates a baseline transaction in CREATED state."""
-    async with test_db_session_maker() as session:
-        async with session.begin():
-            txn = Transactions(
-                id=uuid.uuid4(),
-                merchant_id="merchant_test_01",
-                order_id="order_12345",
-                amount=50000,  # 500.00 INR (strictly BIGINT paise)
-                currency="INR",
-                status=TransactionState.CREATED.value,
-                payment_method="UPI",
-            )
-            session.add(txn)
-            await session.flush()
-            return txn
+    async with test_db_session_maker() as session, session.begin():
+        txn = Transactions(
+            id=uuid.uuid4(),
+            merchant_id="merchant_test_01",
+            order_id="order_12345",
+            amount=50000,  # 500.00 INR (strictly BIGINT paise)
+            currency="INR",
+            status=TransactionState.CREATED.value,
+            payment_method="UPI",
+        )
+        session.add(txn)
+        await session.flush()
+        return txn
 
 
 def test_twelve_strict_states_defined():
@@ -78,9 +74,9 @@ def test_twelve_strict_states_defined():
         "FAILED",
     }
     actual_states = {s.value for s in TransactionState}
-    assert expected_states == actual_states, (
-        f"Mismatch in 12 states. Expected {expected_states}, got {actual_states}"
-    )
+    assert (
+        expected_states == actual_states
+    ), f"Mismatch in 12 states. Expected {expected_states}, got {actual_states}"
 
 
 def test_invalid_state_transition_throws_exception():
@@ -216,7 +212,9 @@ async def test_transition_writes_state_log_automatically(test_db_session_maker, 
 
 
 @pytest.mark.anyio
-async def test_gateway_call_releases_lock_before_external_api(test_db_session_maker, sample_transaction):
+async def test_gateway_call_releases_lock_before_external_api(
+    test_db_session_maker, sample_transaction
+):
     """
     MANDATE:
     Use pessimistic locking (SELECT FOR UPDATE) during the transition process,
@@ -306,7 +304,9 @@ async def test_gateway_call_releases_lock_before_external_api(test_db_session_ma
 
 
 @pytest.mark.anyio
-async def test_gateway_call_failure_records_failed_state_and_log(test_db_session_maker, sample_transaction):
+async def test_gateway_call_failure_records_failed_state_and_log(
+    test_db_session_maker, sample_transaction
+):
     """Verify that if an external gateway API fails/times out, lock re-acquisition transitions to failure."""
     sm = TransactionStateMachine(session_maker=test_db_session_maker)
 
@@ -334,7 +334,10 @@ async def test_gateway_call_failure_records_failed_state_and_log(test_db_session
 
     assert result.success is False
     assert isinstance(result.error, ConnectionResetError)
-    assert result.transaction.status == TransactionState.FAILED.value or result.transaction.status == TransactionState.AUTH_FAILED.value
+    assert (
+        result.transaction.status == TransactionState.FAILED.value
+        or result.transaction.status == TransactionState.AUTH_FAILED.value
+    )
     assert "Gateway TCP connection dropped" in result.transaction.error_message
 
 
@@ -348,7 +351,7 @@ async def test_gateway_transition_scope_context_manager(test_db_session_maker, s
         sample_transaction.id,
         TransactionState.ROUTE_SELECTED,
         StateTrigger.ROUTE_SELECTED,
-        "service:router"
+        "service:router",
     )
 
     async with sm.gateway_transition_scope(
@@ -368,7 +371,9 @@ async def test_gateway_transition_scope_context_manager(test_db_session_maker, s
 
     # Verify transaction transitioned to AUTHORISED
     async with test_db_session_maker() as session:
-        res = await session.execute(select(Transactions).where(Transactions.id == sample_transaction.id))
+        res = await session.execute(
+            select(Transactions).where(Transactions.id == sample_transaction.id)
+        )
         txn = res.scalar_one()
         assert txn.status == TransactionState.AUTHORISED.value
         assert txn.gateway_transaction_id == "pay_982181"

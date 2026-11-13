@@ -104,7 +104,7 @@ class PayUGateway(PaymentGateway):
 
         raw_payload = {
             "mihpayid": gw_id,
-            "status": "success" if resolved_status in ("AUTHORIZED", "CAPTURED") else "failure",
+            "status": ("success" if resolved_status in ("AUTHORIZED", "CAPTURED") else "failure"),
             "reconciliation_status": resolved_status,
         }
 
@@ -115,4 +115,3 @@ class PayUGateway(PaymentGateway):
             raw_payload=raw_payload,
             latency_ms=latency_ms,
         )
-

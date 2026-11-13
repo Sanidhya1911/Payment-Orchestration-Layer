@@ -1,9 +1,8 @@
 import abc
 import asyncio
-import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from app.core.enums import GatewayType
 from app.gateways.exceptions import (
@@ -17,28 +16,30 @@ from app.gateways.exceptions import (
 @dataclass
 class GatewayAuthRequest:
     """Standardized authorization request payload passed to gateway adapters."""
+
     transaction_id: uuid.UUID
     amount: int  # Strict BIGINT in minor currency units (paise/cents)
     currency: str  # ISO 4217 (e.g., INR, USD)
     payment_method: str  # CARD, UPI, NETBANKING
     merchant_id: str
     order_id: str
-    customer_id: Optional[str] = None
-    payment_method_details: Optional[Dict[str, Any]] = None
-    mock_header: Optional[str] = None  # Passed from X-Mock-Response header
+    customer_id: str | None = None
+    payment_method_details: dict[str, Any] | None = None
+    mock_header: str | None = None  # Passed from X-Mock-Response header
 
 
 @dataclass
 class GatewayAuthResponse:
     """Standardized response from gateway authorization attempt."""
+
     success: bool
     gateway_transaction_id: str
-    gateway_reference_id: Optional[str]
+    gateway_reference_id: str | None
     status: str
-    raw_payload: Dict[str, Any]
+    raw_payload: dict[str, Any]
     latency_ms: int
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 @dataclass
@@ -47,7 +48,7 @@ class GatewayCaptureRequest:
     gateway_transaction_id: str
     amount: int  # Strict BIGINT
     currency: str
-    mock_header: Optional[str] = None
+    mock_header: str | None = None
 
 
 @dataclass
@@ -56,10 +57,10 @@ class GatewayCaptureResponse:
     gateway_transaction_id: str
     status: str
     captured_amount: int
-    raw_payload: Dict[str, Any]
+    raw_payload: dict[str, Any]
     latency_ms: int
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 @dataclass
@@ -68,8 +69,8 @@ class GatewayRefundRequest:
     gateway_transaction_id: str
     amount: int  # Strict BIGINT
     currency: str
-    reason: Optional[str] = None
-    mock_header: Optional[str] = None
+    reason: str | None = None
+    mock_header: str | None = None
 
 
 @dataclass
@@ -78,17 +79,17 @@ class GatewayRefundResponse:
     gateway_refund_id: str
     refunded_amount: int
     status: str
-    raw_payload: Dict[str, Any]
+    raw_payload: dict[str, Any]
     latency_ms: int
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 @dataclass
 class GatewayStatusQueryRequest:
     transaction_id: uuid.UUID
-    gateway_transaction_id: Optional[str] = None
-    mock_header: Optional[str] = None
+    gateway_transaction_id: str | None = None
+    mock_header: str | None = None
 
 
 @dataclass
@@ -96,10 +97,10 @@ class GatewayStatusQueryResponse:
     success: bool
     gateway_transaction_id: str
     status: str  # AUTHORIZED, CAPTURED, FAILED, PENDING
-    raw_payload: Dict[str, Any]
+    raw_payload: dict[str, Any]
     latency_ms: int
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class PaymentGateway(abc.ABC):
@@ -111,7 +112,7 @@ class PaymentGateway(abc.ABC):
     def __init__(self, gateway_id: str, gateway_type: GatewayType):
         self.gateway_id = gateway_id
         self.gateway_type = gateway_type
-        self._status_registry: Dict[str, str] = {}
+        self._status_registry: dict[str, str] = {}
 
     def set_mock_status(self, gateway_transaction_id: str, status: str) -> None:
         """Utility to configure the true upstream status for a transaction in reconciliation."""
@@ -120,24 +121,20 @@ class PaymentGateway(abc.ABC):
     @abc.abstractmethod
     async def authorize(self, request: GatewayAuthRequest) -> GatewayAuthResponse:
         """Executes payment authorization against the PSP."""
-        pass
 
     @abc.abstractmethod
     async def capture(self, request: GatewayCaptureRequest) -> GatewayCaptureResponse:
         """Settles an authorized payment."""
-        pass
 
     @abc.abstractmethod
     async def refund(self, request: GatewayRefundRequest) -> GatewayRefundResponse:
         """Issues full or partial refund for settled funds."""
-        pass
 
     @abc.abstractmethod
     async def query_status(self, request: GatewayStatusQueryRequest) -> GatewayStatusQueryResponse:
         """Polls the gateway for true current transaction status during reconciliation."""
-        pass
 
-    async def _handle_mock_response(self, mock_header: Optional[str]) -> None:
+    async def _handle_mock_response(self, mock_header: str | None) -> None:
         """
         Interprets X-Mock-Response simulation headers to test resilience,
         timeouts, circuit breaker tripping, and bank declines.
@@ -174,4 +171,3 @@ class PaymentGateway(abc.ABC):
                 gateway_id=self.gateway_id,
                 error_code="CONNECTION_RESET",
             )
-

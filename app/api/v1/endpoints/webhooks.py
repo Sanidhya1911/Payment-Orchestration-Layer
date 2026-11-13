@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,14 +55,18 @@ async def process_incoming_webhook(
         logger.warning("Webhook rejected: missing signature for gateway '%s': %s", gateway, exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Missing webhook signature header for gateway '{gateway}': {str(exc)}",
+            detail=f"Missing webhook signature header for gateway '{gateway}': {exc!s}",
         )
 
     except InvalidWebhookSignatureException as exc:
-        logger.warning("Webhook rejected: invalid HMAC signature for gateway '%s': %s", gateway, exc)
+        logger.warning(
+            "Webhook rejected: invalid HMAC signature for gateway '%s': %s",
+            gateway,
+            exc,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid webhook signature for gateway '{gateway}': {str(exc)}",
+            detail=f"Invalid webhook signature for gateway '{gateway}': {exc!s}",
         )
 
     except WebhookProcessingException as exc:
@@ -75,12 +79,12 @@ async def process_incoming_webhook(
 
 @router.get(
     "/dlq/events",
-    response_model=List[WebhookDLQEventResponse],
+    response_model=list[WebhookDLQEventResponse],
     status_code=status.HTTP_200_OK,
     summary="Query Dead Letter Queue (DLQ) webhooks",
 )
 async def list_dlq_webhooks(
-    gateway: Optional[str] = Query(None, description="Filter by gateway identifier"),
+    gateway: str | None = Query(None, description="Filter by gateway identifier"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_async_db),
@@ -114,5 +118,5 @@ async def replay_dlq_webhook(
     except WebhookProcessingException as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Replay failed: {str(exc)}",
+            detail=f"Replay failed: {exc!s}",
         )

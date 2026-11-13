@@ -1,13 +1,14 @@
-from typing import Any, Dict, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class ErrorDetails(BaseModel):
-    gateway_error_code: Optional[str] = Field(
+    gateway_error_code: str | None = Field(
         default=None,
         description="Downstream gateway error code if failure originated from a PSP",
     )
-    extra: Optional[Dict[str, Any]] = None
+    extra: dict[str, Any] | None = None
 
 
 class ErrorPayload(BaseModel):
@@ -21,6 +22,6 @@ class UniformErrorResponse(BaseModel):
     Uniform Error Envelope formatted strictly with:
     error.code, error.message, and details.gateway_error_code.
     """
-    error: ErrorPayload
-    detail: Optional[str] = None  # Preserves legacy detail compatibility
 
+    error: ErrorPayload
+    detail: str | None = None  # Preserves legacy detail compatibility

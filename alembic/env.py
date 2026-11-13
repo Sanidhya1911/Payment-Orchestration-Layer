@@ -3,6 +3,7 @@ import sys
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
+
 from alembic import context
 
 # Ensure root application directory is in sys.path

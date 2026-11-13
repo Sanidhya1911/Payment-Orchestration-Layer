@@ -1,22 +1,30 @@
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from app.core.enums import PaymentMethod, StateTrigger, TransactionState, TransactionStatus
+
+from app.core.enums import (
+    PaymentMethod,
+    StateTrigger,
+    TransactionState,
+    TransactionStatus,
+)
 
 
 class TransactionTransitionRequest(BaseModel):
     """Payload to trigger an explicit state machine transition."""
+
     target_state: TransactionState
     trigger: StateTrigger
     actor_id: str = Field(..., max_length=100)
-    gateway_payload: Optional[Dict[str, Any]] = None
-    transition_metadata: Optional[Dict[str, Any]] = None
-    gateway_id: Optional[str] = None
-    gateway_transaction_id: Optional[str] = None
-    gateway_reference_id: Optional[str] = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    gateway_payload: dict[str, Any] | None = None
+    transition_metadata: dict[str, Any] | None = None
+    gateway_id: str | None = None
+    gateway_transaction_id: str | None = None
+    gateway_reference_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class TransactionCreateRequest(BaseModel):
@@ -24,30 +32,30 @@ class TransactionCreateRequest(BaseModel):
     Client transaction initiation payload.
     STRICT RULE: Amount MUST be an integer representing minor currency units (paise/cents).
     """
+
     merchant_id: str = Field(..., max_length=100, examples=["merch_live_948271"])
     order_id: str = Field(..., max_length=100, examples=["ord_20261110_99182"])
-    customer_id: Optional[str] = Field(None, max_length=100, examples=["cust_882910"])
-    
+    customer_id: str | None = Field(None, max_length=100, examples=["cust_882910"])
+
     # Financial amount in paise/cents (NEVER floats)
     amount: int = Field(
         ...,
         gt=0,
         description="Transaction amount in minor currency units (e.g. 50000 = ₹500.00 or $500.00). Must be BIGINT integer.",
-        examples=[50000]
+        examples=[50000],
     )
     currency: str = Field(
         ...,
         min_length=3,
         max_length=3,
         description="ISO 4217 Currency Code",
-        examples=["INR"]
+        examples=["INR"],
     )
     payment_method: PaymentMethod = Field(..., examples=[PaymentMethod.UPI])
-    payment_method_details: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        examples=[{"vpa": "user@okhdfcbank"}]
+    payment_method_details: dict[str, Any] | None = Field(
+        default_factory=dict, examples=[{"vpa": "user@okhdfcbank"}]
     )
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: dict[str, Any] | None = Field(default_factory=dict)
 
     @field_validator("currency")
     @classmethod
@@ -58,7 +66,9 @@ class TransactionCreateRequest(BaseModel):
     @classmethod
     def validate_amount_not_float(cls, v: Any) -> int:
         if isinstance(v, float):
-            raise ValueError("Floating-point amounts are strictly prohibited. Pass integer paise/cents.")
+            raise ValueError(
+                "Floating-point amounts are strictly prohibited. Pass integer paise/cents."
+            )
         if v <= 0:
             raise ValueError("Amount must be strictly positive.")
         return int(v)
@@ -69,12 +79,12 @@ class TransactionStateLogResponse(BaseModel):
 
     id: int
     transaction_id: uuid.UUID
-    from_state: Optional[str]
+    from_state: str | None
     to_state: str
     trigger: StateTrigger
     actor_id: str
-    gateway_payload: Optional[Dict[str, Any]] = None
-    transition_metadata: Optional[Dict[str, Any]] = None
+    gateway_payload: dict[str, Any] | None = None
+    transition_metadata: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -84,7 +94,7 @@ class TransactionResponse(BaseModel):
     id: uuid.UUID
     merchant_id: str
     order_id: str
-    customer_id: Optional[str]
+    customer_id: str | None
     amount: int = Field(..., description="Amount in minor currency units (paise/cents)")
     currency: str
     fee_amount: int = Field(..., description="PSP fee in minor units")
@@ -92,13 +102,12 @@ class TransactionResponse(BaseModel):
     refunded_amount: int = Field(..., description="Refunded minor units")
     status: TransactionStatus
     payment_method: str
-    payment_method_details: Optional[Dict[str, Any]] = None
-    gateway_id: Optional[str] = None
-    gateway_transaction_id: Optional[str] = None
-    gateway_reference_id: Optional[str] = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    payment_method_details: dict[str, Any] | None = None
+    gateway_id: str | None = None
+    gateway_transaction_id: str | None = None
+    gateway_reference_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
     created_at: datetime
     updated_at: datetime
-    state_logs: Optional[List[TransactionStateLogResponse]] = []
-
+    state_logs: list[TransactionStateLogResponse] | None = []

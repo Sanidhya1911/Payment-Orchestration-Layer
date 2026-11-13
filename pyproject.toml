@@ -2,3 +2,24 @@
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.black]
+line-length = 100
+target-version = ['py313']
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line length (handled by Black)
+    "UP042", # Class inherits from both str and Enum (used for Pydantic/SQLAlchemy compatibility)
+    "UP046", # Generic subclass type parameters
+]
