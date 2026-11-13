@@ -282,8 +282,57 @@ class GatewayRouter:
         request: GatewayAuthRequest,
         priority_gateways: Optional[List[str]] = None,
     ) -> Tuple[GatewayAuthResponse, str, List[Dict[str, Any]]]:
-        """Backward-compatible entrypoint delegating to dynamic multi-criteria routing."""
-        return await self.route_and_execute(request=request, candidate_ids=priority_gateways)
+        """
+        Executes payment authorization with failover.
+        If priority_gateways is explicitly specified, evaluates in that explicit priority order.
+        Otherwise, uses dynamic multi-criteria scoring via route_and_execute.
+        """
+        if not priority_gateways:
+            return await self.route_and_execute(request=request)
+
+        routing_trace: List[Dict[str, Any]] = []
+        last_exception: Optional[Exception] = None
+
+        for gw_name in priority_gateways:
+            gw_id = gw_name.lower().strip()
+            gateway = self.gateways.get(gw_id)
+            if not gateway:
+                continue
+
+            breaker = self.circuit_breakers.get(gw_id)
+            trace_entry = {
+                "gateway": gw_id,
+                "circuit_state": breaker.state.value,
+            }
+
+            try:
+                response = await breaker.call(gateway.authorize, request)
+                trace_entry["status"] = "SUCCESS"
+                routing_trace.append(trace_entry)
+                return response, gw_id, routing_trace
+            except CircuitBreakerOpenException as exc:
+                trace_entry["status"] = "CIRCUIT_OPEN_FAST_FAIL"
+                trace_entry["reason"] = str(exc)
+                routing_trace.append(trace_entry)
+                last_exception = exc
+                continue
+            except (GatewayTimeoutException, GatewayServiceUnavailableException) as exc:
+                trace_entry["status"] = "GATEWAY_FAILED"
+                trace_entry["reason"] = str(exc)
+                routing_trace.append(trace_entry)
+                last_exception = exc
+                continue
+            except GatewayDeclinedException as exc:
+                trace_entry["status"] = "DECLINED"
+                trace_entry["reason"] = str(exc)
+                routing_trace.append(trace_entry)
+                raise exc
+
+        raise GatewayException(
+            message=f"All candidate gateways failed for transaction {request.transaction_id}. "
+            f"Routing trace: {routing_trace}",
+            error_code="ALL_GATEWAYS_FAILED",
+        ) from last_exception
 
 
 # Aliases for architectural clarity
