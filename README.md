@@ -422,3 +422,74 @@ Our test suite rigorously verifies that:
 4. `transaction_state_log` has no `updated_at` column, guaranteeing immutable audit trails.
 5. Pydantic request models fail validation if a float amount is submitted (e.g. `500.50`), requiring exact integer minor units (e.g. `50050` paise).
 
+---
+
+## ⚡ Webhook Ingestion Pipeline & Dead Letter Queue (DLQ)
+
+The Payment Layer features an industrial webhook ingestion pipeline supporting our 4 primary payment gateways (`razorpay`, `stripe`, `payu`, and `upi`).
+
+### 1. Timing-Attack Safe HMAC-SHA256 Verification
+All incoming webhooks undergo cryptographic HMAC-SHA256 verification using Python's `hmac.compare_digest` (`timingSafeEqual`) to eliminate side-channel timing attacks:
+- **Razorpay**: Header `X-Razorpay-Signature` verified against raw request bytes.
+- **Stripe**: Header `Stripe-Signature` (`t={timestamp},v1={hash}`) verified against `{timestamp}.{raw_body}`.
+- **PayU**: Header `X-PayU-Signature` verified against raw request bytes.
+- **UPI**: Header `X-UPI-Signature` / `X-NPCI-Signature` verified against raw request bytes.
+- Unauthorized or forged signatures immediately return **`401 Unauthorized`**.
+
+### 2. Idempotent Deduplication (Composite Primary Key)
+To prevent duplicate processing of asynchronous PSP webhook retries:
+- The `event_id` is extracted and queried against `processed_webhook_events` using composite primary key `(gateway, event_id)`.
+- If the event is already marked as `PROCESSED` or `DLQ`, the pipeline returns **`HTTP 200 OK`** (`duplicate_ignored`) immediately without re-triggering business logic or state transitions.
+
+### 3. Dead Letter Queue (DLQ) Pattern
+If a webhook handler fails to process an event:
+- The system increments `retry_count`.
+- If processing fails **3 times** (`retry_count >= 3`), the event is automatically transitioned to status **`DLQ`**.
+- The raw payload and failure exception are permanently preserved in `processed_webhook_events` for auditing and manual replay via the `/api/v1/webhooks/dlq/{gateway}/{event_id}/replay` API.
+
+### Webhook Ingestion Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor PSP as Payment Gateway (Razorpay/Stripe/PayU/UPI)
+    participant API as /api/v1/webhooks/{gateway}
+    participant Sec as WebhookSecurity (timingSafeEqual)
+    participant DB as PostgreSQL (processed_webhook_events)
+    participant SM as Transaction State Machine
+    participant DLQ as Dead Letter Queue
+
+    PSP->>API: POST webhook payload + HMAC Signature
+    API->>Sec: verify_hmac_signature(raw_body, headers, secret)
+    alt Invalid or Missing Signature
+        Sec-->>API: InvalidWebhookSignatureException
+        API-->>PSP: HTTP 401 Unauthorized
+    else Signature Valid
+        Sec-->>API: Verified (Constant Time)
+    end
+
+    API->>DB: SELECT WHERE gateway=:gw AND event_id=:id (Composite PK)
+    alt Already PROCESSED or DLQ (Duplicate)
+        DB-->>API: Existing event record
+        API-->>PSP: HTTP 200 OK (duplicate_ignored)
+    else New Event or Retrying Failed Event
+        DB-->>API: New event record (status=RECEIVED)
+        API->>SM: Execute handler (e.g., transition to CAPTURED/FAILED)
+        alt Processing Succeeds
+            SM-->>API: State transition committed
+            API->>DB: UPDATE status='PROCESSED', processed_at=now()
+            API-->>PSP: HTTP 200 OK
+        else Processing Fails (Attempt < 3)
+            SM-->>API: Exception raised
+            API->>DB: UPDATE status='FAILED', retry_count=retry_count+1
+            API-->>PSP: HTTP 500 Internal Server Error (triggers PSP retry)
+        else Processing Fails 3 Times (Attempt >= 3)
+            SM-->>API: 3rd Exception raised
+            API->>DB: UPDATE status='DLQ', processing_error=trace
+            API->>DLQ: Alert & preserve in Dead Letter Queue
+            API-->>PSP: HTTP 200 OK / DLQ Confirmation (No further retries)
+        end
+    end
+```
+
+

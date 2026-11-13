@@ -1,61 +1,118 @@
-import hashlib
-import json
-from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+import logging
+from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_async_db
-from app.core.enums import WebhookProcessingStatus
-from app.models.webhook import ProcessedWebhookEvents
-from app.schemas.webhook import WebhookEventResponse, WebhookIngestRequest
+from app.schemas.webhook import WebhookDLQEventResponse, WebhookIngestResultResponse
+from app.services.webhook import (
+    InvalidWebhookSignatureException,
+    MissingWebhookSignatureException,
+    WebhookProcessingException,
+    webhook_ingestion_service,
+)
+
+logger = logging.getLogger("payment_layer.webhook_api")
 
 router = APIRouter()
 
 
-@router.post("/{gateway}", response_model=WebhookEventResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/{gateway}",
+    response_model=WebhookIngestResultResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Ingest PSP webhook notification",
+    description="""
+    Securely ingests incoming payment webhooks across Razorpay, Stripe, PayU, and UPI:
+    1. HMAC-SHA256 signature verification with timingSafeEqual (constant-time).
+    2. Exactly-once deduplication via composite primary key (gateway, event_id).
+    3. Returns HTTP 200 immediately if duplicate or already acknowledged.
+    4. Automatically routes to Dead Letter Queue (DLQ) if processing fails 3 times.
+    """,
+)
 async def process_incoming_webhook(
     gateway: str,
-    payload: WebhookIngestRequest,
+    request: Request,
     db: AsyncSession = Depends(get_async_db),
 ):
     """
-    Ingests PSP webhook notifications with strict composite primary key deduplication
-    on (gateway, event_id). Ensures exactly-once asynchronous processing.
+    Ingests and processes PSP webhook callbacks.
+    Enforces HMAC-SHA256 signature verification, deduplication, and DLQ protection.
     """
-    gateway_clean = gateway.lower().strip()
-    now = datetime.now(timezone.utc)
+    raw_body = await request.body()
+    headers = dict(request.headers)
 
-    # 1. Deduplication lookup via Composite Primary Key (gateway, event_id)
-    query = select(ProcessedWebhookEvents).where(
-        ProcessedWebhookEvents.gateway == gateway_clean,
-        ProcessedWebhookEvents.event_id == payload.event_id,
+    try:
+        result = await webhook_ingestion_service.ingest_webhook(
+            gateway=gateway,
+            raw_body=raw_body,
+            headers=headers,
+            db=db,
+        )
+        return result
+
+    except MissingWebhookSignatureException as exc:
+        logger.warning("Webhook rejected: missing signature for gateway '%s': %s", gateway, exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Missing webhook signature header for gateway '{gateway}': {str(exc)}",
+        )
+
+    except InvalidWebhookSignatureException as exc:
+        logger.warning("Webhook rejected: invalid HMAC signature for gateway '%s': %s", gateway, exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid webhook signature for gateway '{gateway}': {str(exc)}",
+        )
+
+    except WebhookProcessingException as exc:
+        logger.error("Webhook processing failed for gateway '%s': %s", gateway, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+
+
+@router.get(
+    "/dlq/events",
+    response_model=List[WebhookDLQEventResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Query Dead Letter Queue (DLQ) webhooks",
+)
+async def list_dlq_webhooks(
+    gateway: Optional[str] = Query(None, description="Filter by gateway identifier"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Retrieves all webhooks currently parked in the Dead Letter Queue."""
+    events = await webhook_ingestion_service.get_dlq_events(
+        db=db, gateway=gateway, limit=limit, offset=offset
     )
-    result = await db.execute(query)
-    existing_event = result.scalar_one_or_none()
+    return events
 
-    if existing_event:
-        # Idempotently return already processed event record
-        return existing_event
 
-    # 2. Compute canonical SHA-256 payload hash for tamper protection
-    canonical_body = json.dumps(payload.payload, sort_keys=True, default=str)
-    payload_hash = hashlib.sha256(canonical_body.encode("utf-8")).hexdigest()
-
-    # 3. Create processed webhook event record using Composite Primary Key
-    webhook_event = ProcessedWebhookEvents(
-        gateway=gateway_clean,
-        event_id=payload.event_id,
-        event_type=payload.event_type,
-        payload_hash=payload_hash,
-        status=WebhookProcessingStatus.PROCESSED.value,
-        raw_payload=payload.payload,
-        processing_error=None,
-        received_at=now,
-        processed_at=now,
-    )
-    db.add(webhook_event)
-    await db.flush()
-
-    return webhook_event
-
+@router.post(
+    "/dlq/{gateway}/{event_id}/replay",
+    response_model=WebhookDLQEventResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Replay a Dead Letter Queue (DLQ) webhook",
+)
+async def replay_dlq_webhook(
+    gateway: str,
+    event_id: str,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Manually triggers replay of a dead-lettered webhook event."""
+    try:
+        replayed_event = await webhook_ingestion_service.replay_dlq_event(
+            gateway=gateway, event_id=event_id, db=db
+        )
+        return replayed_event
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except WebhookProcessingException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Replay failed: {str(exc)}",
+        )

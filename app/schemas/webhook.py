@@ -21,6 +21,32 @@ class WebhookEventResponse(BaseModel):
     event_type: str
     payload_hash: str
     status: WebhookProcessingStatus
+    retry_count: int = 0
+    raw_payload: Dict[str, Any]
+    processing_error: Optional[str] = None
+    received_at: datetime
+    processed_at: Optional[datetime] = None
+
+
+class WebhookIngestResultResponse(BaseModel):
+    status: str = Field(..., description="Ingestion status: PROCESSED, duplicate_ignored, DLQ, etc.")
+    gateway: str
+    event_id: str
+    retry_count: int = 0
+    message: Optional[str] = None
+    processed_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+
+class WebhookDLQEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    gateway: str
+    event_id: str
+    event_type: str
+    payload_hash: str
+    status: str
+    retry_count: int
     raw_payload: Dict[str, Any]
     processing_error: Optional[str] = None
     received_at: datetime

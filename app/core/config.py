@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None
     SYNC_DATABASE_URL: Optional[str] = None
 
+    # Webhook Secrets for HMAC-SHA256 Verification
+    RAZORPAY_WEBHOOK_SECRET: str = Field(default="rzp_sec_live_test_webhook_secret_key_32")
+    STRIPE_WEBHOOK_SECRET: str = Field(default="whsec_stripe_live_test_webhook_secret_key_32")
+    PAYU_WEBHOOK_SECRET: str = Field(default="payu_sec_live_test_webhook_secret_key_32")
+    UPI_WEBHOOK_SECRET: str = Field(default="upi_sec_live_test_webhook_secret_key_32")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

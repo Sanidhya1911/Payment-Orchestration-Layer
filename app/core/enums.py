@@ -95,6 +95,7 @@ class WebhookProcessingStatus(str, Enum):
     PROCESSED = "PROCESSED"
     IGNORED = "IGNORED"
     FAILED = "FAILED"
+    DLQ = "DLQ"
 
 
 class IdempotencyStatus(str, Enum):

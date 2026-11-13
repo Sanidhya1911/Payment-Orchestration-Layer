@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     DateTime,
+    Integer,
     String,
     Text,
     func,
@@ -48,6 +49,13 @@ class ProcessedWebhookEvents(Base):
         default=WebhookProcessingStatus.RECEIVED.value,
         nullable=False,
         index=True
+    )
+    retry_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+        comment="Number of failed processing retry attempts before moving to DLQ"
     )
     raw_payload: Mapped[dict] = mapped_column(
         JSONB,

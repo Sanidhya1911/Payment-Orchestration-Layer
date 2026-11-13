@@ -105,6 +105,7 @@ def upgrade() -> None:
         sa.Column('event_type', sa.String(length=100), nullable=False),
         sa.Column('payload_hash', sa.String(length=64), nullable=False),
         sa.Column('status', sa.String(length=30), server_default='RECEIVED', nullable=False),
+        sa.Column('retry_count', sa.Integer(), server_default='0', nullable=False),
         sa.Column('raw_payload', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column('processing_error', sa.Text(), nullable=True),
         sa.Column('received_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
