@@ -5,6 +5,8 @@ from app.gateways.base import (
     GatewayCaptureResponse,
     GatewayRefundRequest,
     GatewayRefundResponse,
+    GatewayStatusQueryRequest,
+    GatewayStatusQueryResponse,
     PaymentGateway,
 )
 from app.gateways.exceptions import (
@@ -28,6 +30,8 @@ __all__ = [
     "GatewayCaptureResponse",
     "GatewayRefundRequest",
     "GatewayRefundResponse",
+    "GatewayStatusQueryRequest",
+    "GatewayStatusQueryResponse",
     "GatewayException",
     "GatewayTimeoutException",
     "GatewayDeclinedException",

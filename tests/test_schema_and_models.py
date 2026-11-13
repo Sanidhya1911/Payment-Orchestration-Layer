@@ -141,6 +141,9 @@ def test_fastapi_app_routes():
     assert "/api/v1/transactions/{transaction_id}/transitions" in paths
     assert "/api/v1/transactions/idempotency/cleanup" in paths
     assert "/api/v1/webhooks/{gateway}" in paths
+    assert "/api/v1/payments" in paths
+    assert "/api/v1/payments/{id}/capture" in paths
+    assert "/api/v1/payments/{id}/refund" in paths
     assert "/api/v1/gateways" in paths
     assert "/api/v1/gateways/routes" in paths
     assert "/api/v1/gateways/routing-configs" in paths

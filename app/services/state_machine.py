@@ -370,7 +370,7 @@ class TransactionStateMachine:
             from_state=previous_state,
             to_state=target_state.value,
             trigger=trigger,
-            actor_id=actor_id,
+            actor_id=actor_id or "system",
             gateway_payload=gateway_payload,
             transition_metadata=transition_metadata,
         )

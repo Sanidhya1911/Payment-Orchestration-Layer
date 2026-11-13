@@ -492,4 +492,58 @@ sequenceDiagram
     end
 ```
 
+---
+
+## 💳 Payments REST APIs & Uniform Error Formatting
+
+The orchestrator surfaces production REST APIs for end-to-end payment lifecycles:
+
+### 1. Endpoint Specifications
+- **`POST /api/v1/payments`**: Initiates a payment. Enforces strict integer minor unit amounts (BIGINT paise/cents), distributed advisory locking via `Idempotency-Key`, dynamic multi-criteria gateway routing, and deterministic state transitions.
+- **`POST /api/v1/payments/{id}/capture`**: Settles an authorized payment (`AUTHORISED` -> `CAPTURE_INITIATED` -> `CAPTURED`). Database locks are released prior to external PSP invocation.
+- **`POST /api/v1/payments/{id}/refund`**: Issues full or partial refunds for settled payments (`CAPTURED` -> `REFUND_INITIATED` -> `REFUNDED`).
+- **`POST /api/v1/payments/webhooks/{gateway}`**: Unified webhook intake delegated to the HMAC-verified deduplication pipeline.
+
+### 2. Uniform Error Envelope
+All errors across the platform are formatted uniformly to guarantee standard client contract handling:
+
+```json
+{
+  "error": {
+    "code": "PAYMENT_DECLINED",
+    "message": "Transaction declined by issuing bank via gateway 'stripe'",
+    "details": {
+      "gateway_error_code": "CARD_DECLINED"
+    }
+  }
+}
+```
+
+---
+
+## 🔄 Automated Reconciliation Engine (Background Cron)
+
+The **Reconciliation Engine** runs on a standing **15-minute cron schedule** (interval = 900s) to guarantee eventual consistency and auditability against silent network failures:
+
+1. **Stuck Transaction Detection**: Scans for transactions stuck in **`AUTH_INITIATED`** or **`CAPTURE_INITIATED`** for **> 5 minutes**.
+2. **Upstream Gateway Polling**: Queries the assigned PSP adapter (`query_status`) for the true source-of-truth status.
+3. **`RECONCILIATION_OVERRIDE` Audit Event**: If a mismatch is detected (e.g., PSP confirms authorization or capture occurred while DB remained in initiated state), the engine executes the state transition and automatically records an immutable ledger log entry with `trigger="RECONCILIATION_OVERRIDE"`, `actor_id="system_reconciliation_engine"`, and raw gateway telemetry.
+
+```mermaid
+flowchart TD
+    Start([Cron Trigger: Every 15 Minutes]) --> QueryStuck[Query DB: status IN AUTH_INITIATED, CAPTURE_INITIATED AND age > 5m]
+    QueryStuck --> CheckCount{Stuck Transactions Found?}
+    CheckCount -- No --> Sleep([Sleep until next 15-min tick])
+    CheckCount -- Yes --> Loop[For Each Stuck Transaction]
+    Loop --> PollGW[Poll Gateway query_status]
+    PollGW --> Compare{Status Mismatch with DB?}
+    Compare -- No In-Flight --> Next[Keep in-flight state]
+    Compare -- Yes Mismatch --> ApplyOverride[Apply State Transition with trigger: RECONCILIATION_OVERRIDE]
+    ApplyOverride --> WriteLog[(Append to transaction_state_log: actor=system_reconciliation_engine)]
+    WriteLog --> Next
+    Next --> Loop
+    Loop --> Done([Log Reconciliation Report])
+```
+
+
 

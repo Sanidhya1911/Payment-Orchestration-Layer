@@ -136,6 +136,10 @@ class GatewayRouter:
         """Returns the current Circuit Breaker status for a gateway."""
         return self.circuit_breakers.get(gateway_id).state
 
+    def get_gateway(self, gateway_id: str) -> Optional[PaymentGateway]:
+        """Returns the gateway adapter instance for the specified identifier."""
+        return self.gateways.get(gateway_id.lower().strip())
+
     def rank_gateways(
         self,
         request: GatewayAuthRequest,
@@ -271,11 +275,14 @@ class GatewayRouter:
                 routing_trace.append(trace_entry)
                 raise exc
 
+        if last_exception:
+            raise last_exception
+
         raise GatewayException(
             message=f"All candidate gateways failed for transaction {request.transaction_id}. "
             f"Routing trace: {routing_trace}",
             error_code="ALL_GATEWAYS_FAILED",
-        ) from last_exception
+        )
 
     async def execute_with_failover(
         self,
@@ -328,11 +335,14 @@ class GatewayRouter:
                 routing_trace.append(trace_entry)
                 raise exc
 
+        if last_exception:
+            raise last_exception
+
         raise GatewayException(
             message=f"All candidate gateways failed for transaction {request.transaction_id}. "
             f"Routing trace: {routing_trace}",
             error_code="ALL_GATEWAYS_FAILED",
-        ) from last_exception
+        )
 
 
 # Aliases for architectural clarity

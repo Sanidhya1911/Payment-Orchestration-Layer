@@ -84,6 +84,24 @@ class GatewayRefundResponse:
     error_message: Optional[str] = None
 
 
+@dataclass
+class GatewayStatusQueryRequest:
+    transaction_id: uuid.UUID
+    gateway_transaction_id: Optional[str] = None
+    mock_header: Optional[str] = None
+
+
+@dataclass
+class GatewayStatusQueryResponse:
+    success: bool
+    gateway_transaction_id: str
+    status: str  # AUTHORIZED, CAPTURED, FAILED, PENDING
+    raw_payload: Dict[str, Any]
+    latency_ms: int
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 class PaymentGateway(abc.ABC):
     """
     Abstract Base Adapter defining the standard PSP interaction contract.
@@ -93,6 +111,11 @@ class PaymentGateway(abc.ABC):
     def __init__(self, gateway_id: str, gateway_type: GatewayType):
         self.gateway_id = gateway_id
         self.gateway_type = gateway_type
+        self._status_registry: Dict[str, str] = {}
+
+    def set_mock_status(self, gateway_transaction_id: str, status: str) -> None:
+        """Utility to configure the true upstream status for a transaction in reconciliation."""
+        self._status_registry[gateway_transaction_id] = status
 
     @abc.abstractmethod
     async def authorize(self, request: GatewayAuthRequest) -> GatewayAuthResponse:
@@ -107,6 +130,11 @@ class PaymentGateway(abc.ABC):
     @abc.abstractmethod
     async def refund(self, request: GatewayRefundRequest) -> GatewayRefundResponse:
         """Issues full or partial refund for settled funds."""
+        pass
+
+    @abc.abstractmethod
+    async def query_status(self, request: GatewayStatusQueryRequest) -> GatewayStatusQueryResponse:
+        """Polls the gateway for true current transaction status during reconciliation."""
         pass
 
     async def _handle_mock_response(self, mock_header: Optional[str]) -> None:

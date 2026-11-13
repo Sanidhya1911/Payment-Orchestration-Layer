@@ -9,6 +9,8 @@ from app.gateways.base import (
     GatewayCaptureResponse,
     GatewayRefundRequest,
     GatewayRefundResponse,
+    GatewayStatusQueryRequest,
+    GatewayStatusQueryResponse,
     PaymentGateway,
 )
 
@@ -90,6 +92,29 @@ class UPIGateway(PaymentGateway):
             gateway_refund_id=refund_rrn,
             refunded_amount=request.amount,
             status="REFUNDED",
+            raw_payload=raw_payload,
+            latency_ms=latency_ms,
+        )
+
+    async def query_status(self, request: GatewayStatusQueryRequest) -> GatewayStatusQueryResponse:
+        start_time = time.monotonic()
+        await self._handle_mock_response(request.mock_header)
+        latency_ms = int((time.monotonic() - start_time) * 1000)
+
+        gw_id = request.gateway_transaction_id or f"UPI_{request.transaction_id.hex[:12].upper()}"
+        resolved_status = self._status_registry.get(gw_id, "AUTHORIZED")
+
+        raw_payload = {
+            "txnId": gw_id,
+            "status": "SUCCESS" if resolved_status in ("AUTHORIZED", "CAPTURED") else "FAILURE",
+            "responseCode": "00" if resolved_status in ("AUTHORIZED", "CAPTURED") else "U30",
+            "reconciliation_status": resolved_status,
+        }
+
+        return GatewayStatusQueryResponse(
+            success=resolved_status in ("AUTHORIZED", "CAPTURED"),
+            gateway_transaction_id=gw_id,
+            status=resolved_status,
             raw_payload=raw_payload,
             latency_ms=latency_ms,
         )

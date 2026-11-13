@@ -4,6 +4,7 @@ from typing import Optional
 class GatewayException(Exception):
     """Base exception for all payment gateway adapter errors."""
     def __init__(self, message: str, gateway_id: Optional[str] = None, error_code: Optional[str] = None):
+        self.message = message
         self.gateway_id = gateway_id
         self.error_code = error_code or "GATEWAY_ERROR"
         super().__init__(message)
