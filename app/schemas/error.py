@@ -23,3 +23,4 @@ class UniformErrorResponse(BaseModel):
     """
     error: ErrorPayload
     detail: Optional[str] = None  # Preserves legacy detail compatibility
+

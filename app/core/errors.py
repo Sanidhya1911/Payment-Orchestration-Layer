@@ -263,3 +263,4 @@ def register_exception_handlers(app: FastAPI) -> None:
             headers=exc.headers,
             content=content,
         )
+
